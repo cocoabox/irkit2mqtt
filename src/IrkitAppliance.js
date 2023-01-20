@@ -31,7 +31,6 @@ class IrkitAppliance extends EventEmitter {
         // to be implemented by child
         throw new Error('interface() is not implemented');
     }
-
     #validate_state(state_name, state_value, setting_states=null) {
         const rule = this.constructor.interface?.[state_name];
         if (! rule) {
@@ -91,6 +90,12 @@ class IrkitAppliance extends EventEmitter {
         },sec * 1000);
     }
     
+    clear_states() {
+        this.#states = {};
+        this.#state_updated_springload_timer_clear();
+        this.#state_updated_springload_timer_set(springload_state_updated_sec);
+    }
+
     internal_set_state(state_name, state_value, setting_states={}) {
         try {
             if (false === this.#validate_state(state_name, state_value, setting_states)) {
@@ -101,6 +106,7 @@ class IrkitAppliance extends EventEmitter {
             
             this.#state_updated_springload_timer_clear();
             this.#state_updated_springload_timer_set(springload_state_updated_sec);
+            return true;
         }
         catch (error) {
             console.warn('error while validating state :', state_name, error.stack);
@@ -112,18 +118,22 @@ class IrkitAppliance extends EventEmitter {
     }
 
     set_state(state_name, state_value) {
-        this.internal_set_state(state_name, state_value, {});
+        if (! this.internal_set_state(state_name, state_value, {})) {
+            return false;
+        }
         this.after_set_state();
-        return this;
+        return true;
     }
 
     set_states(state_name_value_pairs) {
         for (const [state_name, state_value] of Object.entries(state_name_value_pairs)) {
             console.log('[set states]', state_name, state_value);
-            this.internal_set_state(state_name, state_value, state_name_value_pairs);
+            if (! this.internal_set_state(state_name, state_value, state_name_value_pairs)) {
+                return false;
+            }
         }
         this.after_set_state();
-        return this;
+        return true;
     }
     get_state(state_name, default_value=null) {
         return state_name in this.#states ? 
@@ -153,7 +163,7 @@ class IrkitAppliance extends EventEmitter {
      * @return {Promise}
      */
     send() {
-        console.log("sending states :", this.states);
+        console.log("💬 send() :", JSON.stringify(this.states));
         return new Promise((send_all_done, reje) => {
             let irkit_data;
             try {

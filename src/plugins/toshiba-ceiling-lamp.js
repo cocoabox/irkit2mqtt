@@ -16,9 +16,9 @@ const {IrData2} = require('../IrData2');
 // await lamp.set_states({mode: 'normal'}).send(); // 全光 
 // await lamp.set_states({mode: 'theater'}).send(); // シアター
 //
-// await lamp.set_states({mode: 'normal', advanced:true, brightness: 5}).send(); // 全光-?明るさ5/20
-// await lamp.set_states({mode: 'normal', advanced:true, 'color-temp': 13}).send(); // 全光->やや冷たい色温度13/20
-// await lamp.set_states({mode: 'normal', advanced:true, brightness: 0, r: 5, b: 5}).send(); // 紫色 (赤、青それぞれ5/10に設定)
+// await lamp.set_states({mode: 'normal', brightness: 5}).send(); // 全光-?明るさ5/20
+// await lamp.set_states({mode: 'normal', 'color-temp': 13}).send(); // 全光->やや冷たい色温度13/20
+// await lamp.set_states({mode: 'normal',  brightness: 0, r: 5, b: 5}).send(); // 紫色 (赤、青それぞれ5/10に設定)
 //
 class ToshibaFRC205TIrData extends IrData2 {
     constructor() {
@@ -40,12 +40,9 @@ const customer_code = [
     [1, 1, 0, 0, 1, 1, 1, 1]
 ];
 
-const rgb_max = 10;
-
 //
 // my_light.set_states({
 //      mode: 'normal',
-//      advanced: true,
 //      brightness: 20,
 // });
 //
@@ -55,6 +52,13 @@ const rgb_max = 10;
 //
 //
 class ToshibaCeilingLamp extends IrkitAppliance {
+    static get rgb_min() {
+        return 0;
+    }
+    static get rgb_max() {
+        return 10;
+    }
+
     #ch;
     constructor(irkit_inst, setup={}) {
         setup = Object.assign({ch:1}, setup);
@@ -93,9 +97,6 @@ class ToshibaCeilingLamp extends IrkitAppliance {
 
     static get interface() {
         return {
-            advanced: {
-                type: 'boolean',
-            },
             mode: {
                 type: 'string',
                 only: ['max', 'off', 'normal', 'benkyo', 'relax', 'theater', 'kirei', 'color', 'night-light', 'oyasumi-assist'],
@@ -120,21 +121,27 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             },
             r: {
                 type: 'number',
-                range: {min: 0, max: rgb_max},
+                range: {min: this.rgb_min, max: this.rgb_max},
                 null_ok: true,
             },
             g: {
                 type: 'number',
-                range: {min: 0, max: rgb_max},
+                range: {min: this.rgb_min, max: this.rgb_max},
                 null_ok: true,
             },
             b: {
                 type: 'number',
-                range: {min: 0, max: rgb_max},
+                range: {min: this.rgb_min, max: this.rgb_max},
                 null_ok: true,
             },
         };
     }
+
+    after_set_state() {
+        if ('off' === this.get_state('mode')) {
+            this.internal_set_state('brightness', 0);
+        }
+    }    
     static brightness_range(mode) {
         switch (mode) {
             case 'off': return [0, 0];
@@ -150,23 +157,25 @@ class ToshibaCeilingLamp extends IrkitAppliance {
     }
 
     #get_irkit_dict(key_name, repeats=0) {
-            const bits = this.#get_key_bits(key_name);
-            if (! bits) {
-                throw new Error('unknown key_name :', key_name);
-            }
-            const irkit_dict = (new ToshibaFRC205TIrData())
-                .append_bits(customer_code[0])
-                .append_bits(customer_code[1])
-                .append_bits(bits)
-                .append_bits(bits.map(n => (new Bit(n)).flip().to_number()))
-                .terminate_frame()
-                .append_repeats(repeats)
-                .to_irkit_data();
-            console.log('adding:', JSON.stringify(irkit_dict));
-            return irkit_dict;
+        const bits = this.#get_key_bits(key_name);
+        if (! bits) {
+            throw new Error('unknown key_name :', key_name);
+        }
+        const irkit_dict = (new ToshibaFRC205TIrData())
+            .append_bits(customer_code[0])
+            .append_bits(customer_code[1])
+            .append_bits(bits)
+            .append_bits(bits.map(n => (new Bit(n)).flip().to_number()))
+            .terminate_frame()
+            .append_repeats(repeats)
+            .to_irkit_data();
+        console.log('adding:', JSON.stringify(irkit_dict));
+        return irkit_dict;
     }
 
     generate_irkit_data() {
+        const {rgb_min, rgb_max} = this.constructor;
+
         const steps = [];
         const add_sleep = msec => {
             console.log("add_sleep", msec);
@@ -240,7 +249,7 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             add_key(key_name_down);
             add_sleep(800);
             cur++;
-            
+
             const step = () => {
                 const delta = Math.abs(cur - wanted_level);
                 if (delta >= 2) {
@@ -282,7 +291,7 @@ class ToshibaCeilingLamp extends IrkitAppliance {
         const mode = this.get_state('mode', 'normal');
         const wanted_brightness = this.get_state('brightness', null);
         let adjust_brightness = true;
-        if (mode === 'normal' && ! wanted_brightness) {
+        if (mode === 'normal' && 0 === wanted_brightness) {
             add_key('off');
             adjust_brightness = false;
         }
@@ -314,8 +323,12 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             }
         }
         const [min_bright, max_bright] = this.constructor.brightness_range(mode);
-        if (this.get_state('advanced', false)) {
-            this.set_state('advanced', false);
+
+        const only_got_mode = Object.keys(this.states).length === 1 && 
+            Object.keys(this.states).includes('mode');
+        const advanced = ! only_got_mode;
+
+        if (advanced) {
             // takes at most 3.5 sec for the light to fade from 0 to 100% brightness
             add_sleep(3600);
 
@@ -374,7 +387,9 @@ class ToshibaCeilingLamp extends IrkitAppliance {
         switch(action_name) {
             case 'normal':
             case 'max':
-                this.internal_set_state('mode', 'normal');
+                this.clear_states();
+                this.set_state('mode', 'normal');
+                this.set_state('brightness', this.constructor.brightness_range('normal')[1]);
                 return {single: this.#get_irkit_dict(action_name, 1)};
             case 'off':
             case 'theater':
@@ -384,7 +399,9 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             case 'night-light':
             case 'oyasumi-assist':
             case 'color':
-                this.internal_set_state('mode', action_name);
+                this.clear_states();
+                this.set_state('mode', action_name);
+                this.set_state('brightness', this.constructor.brightness_range(action_name)[1]);
                 return {single: this.#get_irkit_dict(action_name, 1)};
             default:
                 console.warn('unknown action_name supplied to action () :', action_name);

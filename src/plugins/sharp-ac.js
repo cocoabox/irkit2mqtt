@@ -165,7 +165,7 @@ class SharpA909JB extends IrkitAppliance {
             },
         };
     }
-
+ 
     after_set_state() {
         if (['warm', 'dry', 'indoor_drying'].includes(this.get_state('mode'))) {
             if (this.get_state('direction') === 'ceiling') {
@@ -241,7 +241,7 @@ class SharpA909JB extends IrkitAppliance {
             irdata.append_nibble(new Nibble(0b1000));
         }
         // console.log("1..12 :", irdata.bits.join('').replaceAll(/(.{4})/g, '$1 ' ));
-        
+
 
         // --- #13 mode
         irdata.append_nibble(new Nibble(consts.mode[mode]));
@@ -260,7 +260,7 @@ class SharpA909JB extends IrkitAppliance {
             new Nibble(
                 (consts.direction[ mode === 'warm' ? 'warm' : 'other' ][direction])
                 ?? consts.direction.other.swing
-        ));
+            ));
 
         // --- #18,19 constant 0000 0000
         irdata.append_nibble(new Byte(0));
@@ -347,19 +347,19 @@ class SharpA909JB extends IrkitAppliance {
             ion, power_saving,
         };
         const multi = ['on', 'off', 'on_cancel', 'off_cancel'].includes(timer) || ! power || simple
-        ? [ // only simulate the MODE button
-            this.constructor.create_irkit_data(Object.assign({}, base)),
-        ]
-        : [ // simulate the WIND DIRECTION, TEMP, STRENGTH buttons separately ?
-            this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'mode'})),
-            {sleep: 500},
-            this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'direction'})),
-            {sleep: 500},
-            this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'temp'})),
-            {sleep: 500},
-            this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'strength'})),
-            {sleep: 500},
-        ];
+            ? [ // only simulate the MODE button
+                this.constructor.create_irkit_data(Object.assign({}, base)),
+            ]
+            : [ // simulate the WIND DIRECTION, TEMP, STRENGTH buttons separately ?
+                this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'mode'})),
+                {sleep: 500},
+                this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'direction'})),
+                {sleep: 500},
+                this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'temp'})),
+                {sleep: 500},
+                this.constructor.create_irkit_data(Object.assign({}, base, {manually_assign: 'strength'})),
+                {sleep: 500},
+            ];
 
         return {multi};
     }

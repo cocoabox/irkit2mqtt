@@ -219,8 +219,13 @@ function sleep(msec) {
                         if (! dev) {
                             throw new Error(`device ${device_name} not found`);
                         }
-                        await dev.set_states(states).send();
-                        console.log('\nDone');
+                        if (! dev.set_states(states)) {
+                            console.warn('failed to set state');    
+                        }
+                        else {
+                            await dev.send();
+                            console.log('\nDone');
+                        }
                     }
                     catch(error) {
                         console.warn(error);

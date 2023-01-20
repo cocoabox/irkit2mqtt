@@ -25,7 +25,7 @@ if [[ ! -z "$LOG_LOCATION" ]]; then
 fi
 LOGROTATE_DATE_FORMAT="%Y-%m-%d"
 
-/usr/bin/env node "$DIR/src" "$CONF_FILE" 2>&1 | while read LINE; do
+IFS='' /usr/bin/env node "$DIR/src" "$CONF_FILE" 2>&1 | while read LINE; do
     if [[ -z "$LOG_LOCATION" ]]; then
         echo "$LINE"
     else 

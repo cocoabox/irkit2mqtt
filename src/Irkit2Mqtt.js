@@ -15,7 +15,11 @@ const plugins = fs.readdirSync(`${__dirname}/plugins/`)
             const plugin = require(require_path);
             if (plugin?.model && plugin?.appliance_class) {
                 console.log(`plugin : ${name_only}`);
-                return plugin;
+                return {type: 'appliance', plugin};
+            }
+            else if (plugin?.model && plugin?.mqtt_rewrite) {
+                console.log(`plugin : ${name_only}`);
+                return {type: 'mqtt_rewrite', plugin};
             }
         }
         catch (err) {
@@ -23,8 +27,37 @@ const plugins = fs.readdirSync(`${__dirname}/plugins/`)
         }
     });
 
+function plugin_find(model, type='appliance') {
+    const plugin_key = {
+        appliance: 'appliance_class',
+        mqtt_rewrite: 'mqtt_rewrite',
+    }[type];
+    if (! plugin_key) 
+        throw new Error(`expecting type to be either "appliance" or "mqtt_rewrite"; got : ${type}`);
+
+    return plugins.find(p => p.type === type && p.plugin.model === model).plugin[plugin_key];
+}
+
 function iso_date() {
     return (new Date(Date.now() - (new Date).getTimezoneOffset() * 60 * 1000)).toISOString();
+}
+
+function to255scale(val, min, max)  {
+    return Math.round((val-min) / (max-min) * 255);
+}
+function from255scale (val255, min, max) {
+    return Math.round(val255 / 255 * (max - min) + min);
+}
+
+function convert_to_boolean  (user_val)  {
+    if (['boolean', 'number'].includes(typeof user_val)) return !! user_val;
+    return {
+        'true': true, 'false': false,
+        '1': true, '0': false,
+        'yes': true, 'no': false,
+        'y': true, 'n': false,
+        'on': true, 'off': false,
+    }[`${user_val}`.trim().toLowerCase()] ?? undefined;
 }
 
 const wait_msec_after_publish = 1000;
@@ -41,10 +74,11 @@ class Irkit2Mqtt extends MqttClient {
 
         this.#topic_prefix = this.config?.topic_prefix ?? 'irkit2mqtt';
 
-        this.incoming_topic_pattern = /([^\/]+)\/(set|do)(\/([^\/]+))?$/;
+        this.incoming_topic_pattern = /([^\/]+)\/((do)\/([^\/]+)|(set)|(ex)\/([^\/]+)\/set)$/;
         this.mqtt_subscribe([
             `${this.#topic_prefix}/+/set`,
             `${this.#topic_prefix}/+/do/+`,
+            `${this.#topic_prefix}/+/ex/+/set`,  // expanded topic
         ]);
         this.throttle_cooldown_time_sec = 5; 
 
@@ -65,7 +99,7 @@ class Irkit2Mqtt extends MqttClient {
                         inst: null, // to be populated during get_inst() call
                         get_irkit: () => this.#get_irkit_inst(irkit),
                         get_inst: () => this.#get_appliance_inst(appliance_name),
-                        appliance_class: plugins.find(p => p.model === model)?.appliance_class,
+                        appliance_class: plugin_find(model, 'appliance'),
                         model,
                         setup,
                     }];
@@ -100,6 +134,7 @@ class Irkit2Mqtt extends MqttClient {
     #on_appliance_state_updated(appliance_name, states) {
         console.log(`[EVENT] appliance ${appliance_name} state updated`, JSON.stringify(states));
         this.#publish_appliance_status(appliance_name);
+        this.#publish_appliance_status_individually(appliance_name);
     }
 
     #get_appliance_inst(name) {
@@ -210,7 +245,7 @@ class Irkit2Mqtt extends MqttClient {
                     console.warn('discover_using_arp failed');
                     return {};
                 }
-                
+
             };
 
             const interfac = conf?.interface ?? '';
@@ -256,8 +291,7 @@ class Irkit2Mqtt extends MqttClient {
                     this.#discovering = false;
                     return;
                 }
-            }
-        };
+            } };
         setInterval(() => {
             discovery_func();
         }, (conf.interval ?? 600) * 1000);
@@ -272,60 +306,80 @@ class Irkit2Mqtt extends MqttClient {
     async mqtt_on_message(topic, message_obj) {
         const mat = topic.match(this.incoming_topic_pattern);
         const appliance_name = mat?.[1];
-        const op = mat?.[2];
-        const action_name = mat?.[4];
-        if (appliance_name && op) {
-            try {
-                switch(op) {
-                    case 'set':
-                        if (message_obj instanceof Buffer) {
-                            console.warn(`for this topic "${topic}" valid JSON message body is required; got :`, message_obj.toString());
-                            this.mqtt_publish(`${topic}/result`, "bad-request");
-                        }
-                        if (typeof message_obj === 'object') {
-                            const err = await this.#appliance_set(appliance_name, message_obj);
-                            this.mqtt_publish(`${topic}/result`, err ? err : "ok");
-                        }
-                        else {
-                            console.warn(`for this topic "${topic}" a JSON message body is required; got :`, message_obj);
-                            this.mqtt_publish(`${topic}/result`, "bad-request");
-                        }
-                        break;
-                    case 'do':
-                        if (! action_name) {
-                            console.warn('action name is required in topic');
-                            this.mqtt_publish(`${topic}/result`, "bad-request");
-                        }
-                        else if (message_obj === null || typeof message_obj === 'undefined') {
-                            const err = await this.#appliance_do(appliance_name, action_name, []);
-                            this.mqtt_publish(`${topic}/result`, err ? err : "ok");
-                        }
-                        else if (Array.isArray(message_obj)) {
-                            const err = await this.#appliance_do(appliance_name, action_name, message_obj);
-                            this.mqtt_publish(`${topic}/result`, err ? err : "ok");
-                        }
-                        else if (['boolean', 'string', 'number'].includes(typeof message_obj)) {
-                            const err = await this.#appliance_do(appliance_name, action_name, [message_obj]);
-                            this.mqtt_publish(`${topic}/result`, err ? err : "ok");
-                        }
-                        else {
-                            console.warn(`for this topic "${topic}" either JSON (Array) or primitive type is required as message body`);
-                            this.mqtt_publish(`${topic}/result`, "bad-request");
-                        }
-                        break;
-                    default:
-                        console.warn(`unsupported operation : ${op}`);
-                }
-            }
-            catch (error) {
-                console.warn('uncaught exception when processing appliance message', error);
-                this.mqtt_publish(`${topic}/result`, "error");
-            }
+        let topic_type;
+        let ex_state_name;
+        let action_name;
+        if (mat?.[5] === 'set') {
+            topic_type = 'set';
+        }
+        else if (mat?.[6] === 'ex') {
+            topic_type = 'ex';
+            ex_state_name = mat?.[7];
+        }
+        else if (mat?.[3] === 'do') {
+            topic_type = 'do';
+            action_name = mat?.[4];
         }
         else {
-            console.warn(`we don't know how to process this topic "${topic}"`);
+            console.warn('topic doesnt match any known patterns (set,ex,do) :', topic);
             this.mqtt_publish(`${topic}/result`, "bad-request");
+            return;
         }
+        try {
+            switch(topic_type) {
+                case 'ex': 
+                    if (message_obj instanceof Buffer) {
+                        message_obj = message_obj.toString('utf8');
+                    }
+                    const set_err = await this.#appliance_set_individual_state(
+                        appliance_name, ex_state_name, message_obj);
+                    this.mqtt_publish(`${topic}/result`, set_err ? set_err : "ok");
+                    break; 
+                case 'set':
+                    if (message_obj instanceof Buffer) {
+                        console.warn(`for this topic "${topic}" valid JSON message body is required; got :`, message_obj.toString());
+                        this.mqtt_publish(`${topic}/result`, "bad-request");
+                    }
+                    if (typeof message_obj === 'object') {
+                        const err = await this.#appliance_set(appliance_name, message_obj);
+                        this.mqtt_publish(`${topic}/result`, err ? err : "ok");
+                    }
+                    else {
+                        console.warn(`for this topic "${topic}" a JSON message body is required; got :`, message_obj);
+                        this.mqtt_publish(`${topic}/result`, "bad-request");
+                    }
+                    break;
+                case 'do':
+                    if (! action_name) {
+                        console.warn('action name is required in topic');
+                        this.mqtt_publish(`${topic}/result`, "bad-request");
+                    }
+                    else if (message_obj === null || typeof message_obj === 'undefined') {
+                        const err = await this.#appliance_do(appliance_name, action_name, []);
+                        this.mqtt_publish(`${topic}/result`, err ? err : "ok");
+                    }
+                    else if (Array.isArray(message_obj)) {
+                        const err = await this.#appliance_do(appliance_name, action_name, message_obj);
+                        this.mqtt_publish(`${topic}/result`, err ? err : "ok");
+                    }
+                    else if (['boolean', 'string', 'number'].includes(typeof message_obj)) {
+                        const err = await this.#appliance_do(appliance_name, action_name, [message_obj]);
+                        this.mqtt_publish(`${topic}/result`, err ? err : "ok");
+                    }
+                    else {
+                        console.warn(`for this topic "${topic}" either JSON (Array) or primitive type is required as message body`);
+                        this.mqtt_publish(`${topic}/result`, "bad-request");
+                    }
+                    break;
+                default:
+                    console.warn(`unsupported operation : ${op}`);
+            }
+        }
+        catch (error) {
+            console.warn('uncaught exception when processing appliance message', error);
+            this.mqtt_publish(`${topic}/result`, "error");
+        }
+
     }
 
     #send_springload_timers;
@@ -351,6 +405,122 @@ class Irkit2Mqtt extends MqttClient {
         delete this.#send_springload_timers[appliance_name];
     }
 
+    /**
+     * @param {string} appliance_name
+     * @param {string} state_name
+     * @param {Buffer|string|number|object} state_value
+     * @return {Promise<string|undefined>}
+     */
+    async #appliance_set_individual_state(appliance_name, state_name, state_value) {
+        const inst = this.#get_appliance_inst(appliance_name);
+        if (! inst) {
+            console.warn('appliance instance not found :', appliance_name);
+            return 'offline';
+        }
+        const rewrite_plugin = this.#get_mqtt_rewrite_plugin(appliance_name);
+        if (! rewrite_plugin) {
+            console.warn(`no mqtt_rewrite plugin exists for ${appliance_model}`);
+            return 'bad-request';
+        }
+        const expansion_def = rewrite_plugin[state_name];
+        if (! expansion_def) {
+            console.warn(`no mqtt_rewrite definition for ${state_name}`);
+            return 'bad-request';
+        }
+        const {set, mapped_state} = expansion_def;
+        const final_state_name = typeof mapped_state === 'string' ? mapped_state :
+            typeof mapped_state === 'function' ? null : state_name;
+        let final_value;
+        if (typeof set === 'function') {
+            try {
+                const ctx = {
+                    convert_to_boolean,
+                    to255scale,
+                    from255scale,
+                    appliance: inst,
+                };
+                final_value = set.apply(ctx, [state_value, inst.states]);
+                if (typeof final_value === 'undefined') {
+                    console.warn(`⚠️  nothing returned from ${appliance_name}'s : mqtt_rewrite_plugin.${state_name}.set() ; state_value =`, state_value);
+                    final_value = state_value;
+                }
+            }
+            catch (error) {
+                console.warn('failed to process set value', state_value, 'because', error);
+                return 'bad-value';
+            }
+        } 
+        else if (set === 'bool' || set === 'boolean') {
+            if (typeof state_value === 'boolean') {
+                // do nothing
+            }
+            else if (typeof state_value === 'string') {
+                // convert string to boolean
+                final_value = convert_to_boolean( state_value );
+                if (typeof final_value === 'undefined') {
+                    console.warn('failed to convert to boolean :', state_value);
+                    return 'bad-value';
+                }
+            }
+            else if (typeof state_value === 'number') {
+                final_value = !! state_value;
+            }
+            else {
+                final_value = !! parseInt(state_value.toString('utf8'));
+            }
+        }
+        else if (set === 'number') {
+            if (typeof state_value === 'number') {
+                // do nothing
+            }
+            else if (typeof state_value === 'string') {
+                final_value = parseFloat(state_value);
+            }
+            else {
+                final_value = parseFloat(state_value.toString('utf8'));
+            }
+        }
+        else if (set === 'string') {
+            final_value = state_value.toString('utf8');
+        }
+        else if (set === 'object') {
+            if (typeof state_value === 'object') {
+                final_value = state_value;
+            }
+            else {
+                console.warn('expecting object {KEY:VAL, ...}, got:', state_value);
+                return 'bad-value';
+            }
+        }
+        else {
+            console.warn(`🔥 unknown value for ${appliance_name}'s : mqtt_rewrite_plugin.${state_name}.set`);
+            return 'bad-config';
+        }
+        //
+        // finally, call appliance's set_state() function
+        //
+        if (! final_state_name && typeof final_value === 'object') {
+            if (! inst.set_states(final_value)) {
+                console.warn(`supplied statename/value dict failed validation :`, final_value);
+                return 'invalid';
+            }
+        }
+        else {
+            if (! inst.set_state(final_state_name, final_value)) {
+                console.warn(`supplied value for state ${state_name} failed validation :`, state_value);
+                return 'invalid';
+            }
+        }
+        this.#send_springload_clear(appliance_name);
+        this.#send_springload_set(appliance_name, this.config?.springload_sec ?? 3);
+        // return error (or return undefined for no error)
+    }
+
+    /**
+     * @param {string} appliance_name
+     * @param {object} set_dict
+     * @return {Promise<string|undefined>}
+     */
     async #appliance_set(appliance_name, set_dict) {
         const inst = this.#get_appliance_inst(appliance_name);
         if (! inst) {
@@ -360,7 +530,7 @@ class Irkit2Mqtt extends MqttClient {
         inst.set_states(set_dict);
         this.#send_springload_clear(appliance_name);
         this.#send_springload_set(appliance_name, this.config?.springload_sec ?? 3);
-        // return no error
+        // return error (or return undefined for no error)
     }
 
     async #appliance_do(appliance_name, action_name, arg_array) {
@@ -415,6 +585,80 @@ class Irkit2Mqtt extends MqttClient {
         const state = inst ? inst.states : null;
         const msg = { model, appliance_type, state };
         await this.mqtt_publish(`${this.#topic_prefix}/${appliance_name}`, msg);
+    }
+
+    #get_mqtt_rewrite_plugin(appliance_name) {
+        const appliance_model = this.#appliances[appliance_name].model;
+        return plugin_find(appliance_model, 'mqtt_rewrite');
+    }
+
+    async #publish_appliance_status_individually(appliance_name) {
+        const {get_inst, get_irkit, model} =  this.#appliances[appliance_name];
+        if (! get_inst || ! get_irkit) {
+            throw new Error(`🔥 appliance not found : ${appliance_name}`);
+        }
+        const expa = this.#get_mqtt_rewrite_plugin(appliance_name);
+        const inst = get_inst();
+        const ctx = { // callback context for calling plugin's mapped_state() and get()
+            convert_to_boolean,
+            to255scale,
+            from255scale,
+            appliance: inst,
+        };        
+        if (Object.keys(expa).length === 0) {
+            return;
+        }
+        console.log('appliance status update (individual) :', appliance_name);
+        for (const [exposed_name, e] of Object.entries(expa)) {
+            const {mapped_state, get} = e;
+
+            const state_value = 
+                typeof mapped_state === 'function' ? mapped_state.apply(ctx, [inst.states])
+                : inst.get_state(mapped_state ?? exposed_name);
+            let message;
+            if (state_value === null || typeof state_value === 'undefined') 
+                continue;
+            if (get === 'as-is') {
+                message = typeof state_value === 'string' 
+                    ? Buffer.from(state_value, 'utf8')
+                    : Array.isArray(state_value) 
+                    ? Buffer.from(state_value.map(n => `${n}`).join(','), 'utf8')
+                    : Buffer.from(JSON.stringify(state_value), 'utf8');
+            }
+            else if (get === 'number') {
+                message = parseFloat(state_value);
+                if (isNaN(message)) continue;
+            }
+            else if (get === 'boolean') {
+                message = typeof state_value === 'boolean' 
+                    ? state_value
+                    : typeof state_value === 'nubmer'
+                    ? !! state_value
+                    : !! parseInt(state_value);
+            }
+            else if (get === 'string') {
+                message = `${state_value}`;
+            }
+            else if (get === 'json') {
+                message = Buffer.from(JSON.stringify(state_value), 'utf8');
+            }
+            else if (typeof get === 'function') {
+                try {
+                    // let plugin convert the state value to something home-assistant recognises
+                    const get_res = get.apply(ctx, [state_value, inst.states]);
+                    message = typeof get_res === 'undefined' ? state_value : get_res;
+                }
+                catch (error) {
+                    console.warn(`⚠️  appliance ${appliance_name}'s mqtt_rewrite_plugin.${exposed_name}.get raised an exception:`, error);
+                    continue;
+                }
+            }
+            else {
+                console.warn(`⚠️  appliance ${appliance_name}'s mqtt_rewrite_plugin.${exposed_name}.get is unknown : ${get} ; publishing state_value as-is`);
+                message = state_value;
+            }
+            await this.mqtt_publish(`${this.#topic_prefix}/${appliance_name}/ex/${exposed_name}`, message);
+        }
     }
     #interval_pub_timer;
     #interval_publishing;
