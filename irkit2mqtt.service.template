@@ -1,0 +1,12 @@
+[Unit]
+Description=irkit2mqtt
+# Requires=docker.service
+# After=docker.service
+
+[Service]
+#Restart=always
+ExecStart=DIR/start.sh
+ExecStop=DIR/stop.sh
+
+[Install]
+WantedBy=multi-user.target

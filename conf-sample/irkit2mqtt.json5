@@ -1,0 +1,47 @@
+{
+    "springload_sec": 2,    // wait 5 sec for no more set messages to arrive, then set_state() and send()
+    "update_interval": 120, // secs
+    "topic_prefix": "irkit2mqtt",
+    "mqtt": {
+        host: 'MQTT_HOST_NAME',
+        port: 8883,
+        // key: 'file:certs/client-key.pem',
+        // cert: 'file:certs/client-cert.pem',
+        // ca: 'file:certs/ca-cert-chain.pem',
+        username: 'USERNAME',
+        password: 'PASSWORd',
+    },
+    "irkits": {
+        "living-room-irkit": {
+            "mac": "20:f8:5e:xx:xx:xx",
+        },
+    },
+    "appliances":{
+        "living-room-aircond": {
+            "irkit": "living-room-irkit",
+            "model": "A909JB"
+        },
+        "bedroom-ceiling-light": {
+            "irkit": "living-room-irkit",
+            "model": "toshiba-frc205t",
+            "setup": { "ch": "1" }
+        },
+        "living-room-tv": {
+            "irkit": "living-room-irkit",
+            "model": "toshiba-ct90485"
+        }
+    },
+    "discovery": {
+        "interval": 600, // seconds ( 10 mins )
+        "interface": "wlan0",
+        "scan_target": "192.168.xx.0-255",
+        "fast": true,
+        "nmap": "/usr/bin/nmap",
+    },
+}
+
+
+
+
+
+
