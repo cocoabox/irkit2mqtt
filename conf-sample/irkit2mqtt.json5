@@ -21,7 +21,7 @@
             "irkit": "living-room-irkit",
             "model": "A909JB"
         },
-        "bedroom-ceiling-light": {
+        "living-room-ceiling-light": {
             "irkit": "living-room-irkit",
             "model": "toshiba-frc205t",
             "setup": { "ch": "1" }
