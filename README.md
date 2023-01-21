@@ -1,3 +1,11 @@
+PREREQUESITES
+=============
+
+- [IRKit](https://jp.mercari.com/search?keyword=irkit&status=on_sale)s
+- linux or macos
+- nodejs > 16
+- nmap
+
 INSTALLING
 ===========
 
@@ -11,6 +19,59 @@ INSTALLING
 
 1. run `install-service.sh` to enable systemd service and start running
 
+
+ON APPLIANCES
+=============
+
+An appliance is a device that receives IR signal from an IRKit.  Multiple IRKits may be defined but must stay in the same network.
+For example, you may have IRKit 'A' in your living room and IRKit 'B' in your basement, each responsible for controlling different
+appliances.
+
+When an IRKit no longer responds to GET-messages requests, or when a POST fails, the IRKit is deemed "unhealthy." All associated
+appliances will be marked as "not available."
+
+
+CONFIGURING
+===========
+
+Save your configuration files to `conf/irkit2mqtt.json5`.
+
+To properly discover an IRKit, define .irkits and .discovery:
+
+```
+{
+    irkits: {
+        "living-room-irkit": { mac : "xx:xx:xx:xx:xx:xx" },
+        // ^ name of IRKit
+    },
+    discovery: {
+        "interval": 600,        // rediscovery interval in seconds
+        "interface": "wlan0",  
+        "scan_target": "192.168.xx.0-255",  // the IP range of all irkits
+        "nmap": "/usr/bin/nmap",     // location of nmap
+    }
+}
+```
+
+To add appliances, define `.appliances`. Remember to link each applaince to the right IRKit using 
+the `.appliances.*.model` field. 
+
+```
+{
+   "appliances":{
+        "living-room-aircond": {
+        // ▲ Name of appliance
+        //                       ▼ name of IRKit‥  
+            "irkit": "living-room-irkit",
+            "model": "A909JB"
+        },
+        "living-room-ceiling-light": {
+            "irkit": "living-room-irkit",
+            "model": "toshiba-frc205t",
+            "setup": { "ch": "1" }
+        },
+}
+```
 
 MQTT MESSAGES
 ==============
@@ -36,7 +97,22 @@ message body : JSON
 example 
 
 ```
-{"message":{"format":"raw","freq":38,"data":[19991,10047,1275,3704,1275,3704,1275,3704,1275,1275,1275,1275,1275,3704,1275,3704,1275,3704,1275,1275,1275,1275,1275,3704,1275,3704,1275,1275,1275,1275,1275,1275,1275,1275,1275,1275,1275,1275,1275,3704,1275,1275,1275,1275,1275,1275,1275,1275,1275,3704,1275,3704,1275,3704,1275,1275,1275,3704,1275,3704,1275,3704,1275,3704,1275,1275,1275]},"guessed":{"format":"nec","T":625,"frames":[[1,1,1,0,0,1,1,1,0,0,1,1,0,0,0,0,0,0,1,0,0,0,0,1,1,1,0,1,1,1,1,0]]}}
+{
+  "message": {
+    "format": "raw",
+    "freq": 38,
+    "data": [
+      19991, 10047, 1275, 3704, 1275, 3704, 1275, 3704, 1275, 1275, 1275, 1275, 1275, 3704, 1275, 3704, 1275, 3704, 1275, 1275, 1275, 1275, 1275, 3704, 1275,
+      3704, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 3704, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 1275, 3704,
+      1275, 3704, 1275, 3704, 1275, 1275, 1275, 3704, 1275, 3704, 1275, 3704, 1275, 3704, 1275, 1275, 1275 ]
+  },
+  "guessed": {
+    "format": "nec",
+    "T": 625,
+    "frames": [ [ 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0 ] ]
+  }
+}
+
 ```
 
 ## published topic `irkit2mqtt/{APPLIANCE_NAME}`
@@ -56,6 +132,13 @@ example
 ```
 {"model":"toshiba-frc205t","appliance_type":"light","state":{"mode":"off","brightness":0}}
 ```
+
+## published topic `irkit2mqtt/{APPLIANCE_NAME}/availability`
+
+Pushed when the health status of the underlying IrKit changes.
+
+mesasge body : text `yes` or `no`
+
 
 ## subscribed topic `irkit2mqtt/{APPLIANCE_NAME}/set`
 
@@ -89,7 +172,7 @@ value/unit conversions where necessary.
 
 For details see 'plugins.'
 
-</summary>
+</details>
 
 Message body depends on the field. Usually it is plain value e.g. `unquoted string` or `plain number`.
 
