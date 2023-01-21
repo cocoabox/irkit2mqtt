@@ -112,13 +112,38 @@ class Irkit extends EventEmitter {
         return this.#healthy;
     }
 
+    // name of appliance we're current busy dealing with
+    #sending_for_appliance_inst;
+    #get_queue_ready(new_appliance_inst) {
+        if (this.#sending_for_appliance_inst) {
+            if (this.#sending_for_appliance_inst === new_appliance_inst) {
+                console.warn('🐾 clear queue');
+                this.#queue.clear();
+                return true;
+            }
+            else {
+                // this IrKit is currentl handling request for other appliances
+                console.warn(`🐾 currently busy sending signals for ${this.#sending_for_appliance_inst.constructor.name}`);
+                return false;
+            }
+        }  
+        else {
+            console.warn('🐾 start dealing with ' + new_appliance_inst.constructor.name);
+            this.#sending_for_appliance_inst = new_appliance_inst;
+            return true;
+        }
+    }
+
     /**
      * enqueues one IrKit data to current send queue
      * @param {object} single
      *      Irkit data {data:[..],mode:"raw",freq:39} 
      * @return {Irkit} returns current instance
      */
-    enqueue_single(single) {
+    enqueue_single(single, appliance_inst) {
+        if (! this.#get_queue_ready(appliance_inst)) {
+            throw new Error('irkit is busy');
+        }
         // console.log("enqueue: single", JSON.stringify(single));
         const send_task = () => this.#post_message(single); 
         this.#queue.enqueue(send_task);
@@ -130,7 +155,10 @@ class Irkit extends EventEmitter {
      *      an array containing Irkit data {data:[..],mode:"raw",freq:39} or a sleep {sleep:MSEC_NUMBER}
      * @return {Irkit} returns current instance
      */
-    enqueue_multi(multi) {
+    enqueue_multi(multi, appliance_inst) {
+        if (! this.#get_queue_ready(appliance_inst)) {
+            throw new Error('irkit is busy');
+        }
         if (! Array.isArray(multi)) {
             throw new TypeError(`expecting multi to be Array instance, got :` + multi);
         }
@@ -181,6 +209,17 @@ class Irkit extends EventEmitter {
             });
         };
         // console.log("enqueue: callback");
+        this.#queue.enqueue(cb_task);        
+        return this;
+    }
+    enqueue_done_callback(cb_function) {
+        const cb_task = () => {
+            return new Promise(resolve => {
+                console.warn(`🐾 finished with ${this.#sending_for_appliance_inst.constructor.name}`);
+                this.#sending_for_appliance_inst = null;
+                cb_function();
+            });
+        };
         this.#queue.enqueue(cb_task);        
         return this;
     }

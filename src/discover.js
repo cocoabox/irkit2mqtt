@@ -58,6 +58,7 @@ function nmap(scan_target, opts = {}) {
         let ips = [];
         if (code=== 0) {
             stdout_arr.forEach(line => {
+                console.log("[nmap says]", line);
                 const match = line.match(/^Host: (.*?) \((.*?)\)\s+(Ports|Status):\s+(.*)$/);
                 const ip = match?.[1];
                 const label = match?.[3]?.toLowerCase();
@@ -66,14 +67,15 @@ function nmap(scan_target, opts = {}) {
                     ips.push(ip);
                 }
             });
+            console.log("[nmap done] ", JSON.stringify(ips));
             resolve({done: 1, ips});
         }
         else {
-            console.warn("status", status);
+            console.warn("[namp failed] status", status);
             reject({status});
         }
         } catch(nmap_err) {
-            console.warn('nmap failed', nmap_err);
+            console.warn('[nmap failed] error', nmap_err);
             reject({error: nmap_err});
         }
     });
@@ -106,6 +108,7 @@ function arp(opts = {}) {
                 return {ip: this_ip, mac: this_mac};
             } else return null;
         }).filter(n => !!n);
+        console.log('[arp found]', JSON.stringify(ip_mac_pairs));
 
         return resolve({done: 1, ip_mac_pairs});
     });

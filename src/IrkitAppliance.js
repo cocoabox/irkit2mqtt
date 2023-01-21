@@ -160,31 +160,52 @@ class IrkitAppliance extends EventEmitter {
      * send all pending IRKit messages and resolves the promise when everything has been sent.
      * if the IrKit is busy processing requests from other appliances, there may be a short
      * delay before the promise is fulfilled
+     * @param {object} o
+     * @param {number} o.timeout_sec timeout in second
      * @return {Promise}
      */
-    send() {
-        console.log("💬 send() :", JSON.stringify(this.states));
+    send({timeout_sec}={}) {
+        timeout_sec ??= 60;
+        console.log("💬 send() :", JSON.stringify(this.states),'⏱️ sec :', timeout_sec);
         return new Promise((send_all_done, reje) => {
+            const timeout_timer = setTimeout(() => {
+                console.warn('💬 🔥 send() timeout'); 
+                reje({timeout: 1});
+            }, timeout_sec * 1000);
+            const kill_timer = () => {
+                clearTimeout(timeout_timer);
+            };
             let irkit_data;
             try {
                 irkit_data = this.generate_irkit_data();
+                if (! irkit_data) {
+                    kill_timeout();
+                    console.warn('generate_irkit_data() returned nothing');
+                    throw new Error('empty irkit data returned from: generate_irkit_data()');
+                }
             }
             catch (error) {
-                console.warn('failed to generate irkit data because', error.stack);
-                reje({error});
-                return;
+                console.warn('💬⚠️ failed to generate irkit data because', error.stack);
+                kill_timeout();
+                return reje({error});
             }
-            if (! irkit_data) {
-                throw new Error('failed to generate IRKit data');
+            try {
+                const {single, multi} = irkit_data;
+                if (single) 
+                    this.#irkit.enqueue_single(single, this);
+                else if (multi) 
+                    this.#irkit.enqueue_multi(multi, this);
             }
-            const {single, multi} = irkit_data;
-            if (single) {
-                this.#irkit.enqueue_single(single);
+            catch (error) {
+                console.warn('💬⚠️ error eneuquing messages :', error);
+                kill_timeout();
+                return reje({error});
             }
-            else if (multi) {
-                this.#irkit.enqueue_multi(multi);
-            }
-            this.#irkit.enqueue_callback(send_all_done);
+            this.#irkit.enqueue_done_callback(() => {
+                console.log('💬 🟢 all send done');
+                kill_timeout();
+                return send_all_done();
+            });
         }); 
     }
     static get actions() {
@@ -243,14 +264,19 @@ class IrkitAppliance extends EventEmitter {
                 console.warn(`exception raised while doing action ${action_name} :`, err);
                 return reje({error: 'do-action-exception'});
             }
-            const {single, multi} = irkit_data;
-            if (single) {
-                this.#irkit.enqueue_single(single);
+            try {
+                const {single, multi} = irkit_data;
+                if (single) {
+                    this.#irkit.enqueue_single(single, this);
+                }
+                else if (multi) {
+                    this.#irkit.enqueue_multi(multi, this);
+                }
+                this.#irkit.enqueue_callback(send_all_done);
+            } catch (error) {
+                console.warn('⚠️ error eneuquing messages :', error);
+                return reje({error: 'busy'});
             }
-            else if (multi) {
-                this.#irkit.enqueue_multi(multi);
-            }
-            this.#irkit.enqueue_callback(send_all_done);
         });
     }
 }

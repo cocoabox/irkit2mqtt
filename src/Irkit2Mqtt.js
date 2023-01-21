@@ -191,11 +191,11 @@ class Irkit2Mqtt extends MqttClient {
     #discovering; 
     #setup_discovery() {
         const conf = this.config.discovery ?? {};
-        // console.log('discovery settings', JSON.stringify(conf));
 
         const discovery_func = async () => {
             if (this.#discovering) return;
             this.#discovering = true;
+            console.log("[discover] this.#irkits = ", this.#irkits);
 
             const get_mac_addresses_wanted = () => {
                 return Object.entries(this.#irkits)
@@ -292,9 +292,11 @@ class Irkit2Mqtt extends MqttClient {
                     return;
                 }
             } };
+
         setInterval(() => {
             discovery_func();
-        }, (conf.interval ?? 600) * 1000);
+        }, (conf.interval ?? 120) * 1000);
+        console.log(`[discover] every ${conf.interval} secs`);
         discovery_func();
     }
 
@@ -390,11 +392,15 @@ class Irkit2Mqtt extends MqttClient {
         this.#send_springload_timers[appliance_name] = setTimeout(() => {
             console.log(`[springload] sending to ${appliance_name} at`, iso_date());
             const inst = this.#get_appliance_inst(appliance_name);
-            if (inst) {
-                inst.send();
-                delete this.#send_springload_timers[appliance_name];
+            inst?.send().then(() => {
+                console.log('[springload] sending completed');
             }
-        }, (wait_sec ?? 1) * 1000);
+            ).catch(error => {
+                console.warn('[springload] sending failed :', error);
+            });
+            delete this.#send_springload_timers[appliance_name];
+
+        }, (wait_sec ?? 3) * 1000);
         console.log(`[springload] ${wait_sec} secs, starting now :`, iso_date());
     }
     #send_springload_clear(appliance_name) {
@@ -406,12 +412,16 @@ class Irkit2Mqtt extends MqttClient {
     }
 
     /**
+     * process incoming ex-field update request
      * @param {string} appliance_name
-     * @param {string} state_name
+     * @param {string} ex_field_name
+     *      ex field name provided by user; ex-field are defined in mqtt-rewrite plugins
      * @param {Buffer|string|number|object} state_value
+     *      ex field value provided by user
      * @return {Promise<string|undefined>}
+     *      return error message string 
      */
-    async #appliance_set_individual_state(appliance_name, state_name, state_value) {
+    async #appliance_set_individual_state(appliance_name, ex_field_name, state_value) {
         const inst = this.#get_appliance_inst(appliance_name);
         if (! inst) {
             console.warn('appliance instance not found :', appliance_name);
@@ -422,14 +432,14 @@ class Irkit2Mqtt extends MqttClient {
             console.warn(`no mqtt_rewrite plugin exists for ${appliance_model}`);
             return 'bad-request';
         }
-        const expansion_def = rewrite_plugin[state_name];
+        const expansion_def = rewrite_plugin[ex_field_name];
         if (! expansion_def) {
-            console.warn(`no mqtt_rewrite definition for ${state_name}`);
+            console.warn(`no mqtt_rewrite definition for ${ex_field_name}`);
             return 'bad-request';
         }
         const {set, mapped_state} = expansion_def;
         const final_state_name = typeof mapped_state === 'string' ? mapped_state :
-            typeof mapped_state === 'function' ? null : state_name;
+            typeof mapped_state === 'function' ? null : ex_field_name;
         let final_value;
         if (typeof set === 'function') {
             try {
@@ -441,7 +451,7 @@ class Irkit2Mqtt extends MqttClient {
                 };
                 final_value = set.apply(ctx, [state_value, inst.states]);
                 if (typeof final_value === 'undefined') {
-                    console.warn(`⚠️  nothing returned from ${appliance_name}'s : mqtt_rewrite_plugin.${state_name}.set() ; state_value =`, state_value);
+                    console.warn(`⚠️  nothing returned from ${appliance_name}'s : mqtt_rewrite_plugin.${ex_field_name}.set() ; state_value =`, state_value);
                     final_value = state_value;
                 }
             }
@@ -493,7 +503,7 @@ class Irkit2Mqtt extends MqttClient {
             }
         }
         else {
-            console.warn(`🔥 unknown value for ${appliance_name}'s : mqtt_rewrite_plugin.${state_name}.set`);
+            console.warn(`🔥 unknown value for ${appliance_name}'s : mqtt_rewrite_plugin.${ex_field_name}.set`);
             return 'bad-config';
         }
         //
@@ -507,7 +517,7 @@ class Irkit2Mqtt extends MqttClient {
         }
         else {
             if (! inst.set_state(final_state_name, final_value)) {
-                console.warn(`supplied value for state ${state_name} failed validation :`, state_value);
+                console.warn(`supplied value for state ${ex_field_name} failed validation :`, state_value);
                 return 'invalid';
             }
         }
@@ -528,6 +538,9 @@ class Irkit2Mqtt extends MqttClient {
             return 'offline';
         }
         inst.set_states(set_dict);
+        // springload: if we're flooded with set state requests, then wait until we're
+        // in the clear for 3 seconds (config.springload_sec) before sending any IR
+        // messages
         this.#send_springload_clear(appliance_name);
         this.#send_springload_set(appliance_name, this.config?.springload_sec ?? 3);
         // return error (or return undefined for no error)
@@ -592,6 +605,9 @@ class Irkit2Mqtt extends MqttClient {
         return plugin_find(appliance_model, 'mqtt_rewrite');
     }
 
+    //
+    // publish ex-fields
+    //
     async #publish_appliance_status_individually(appliance_name) {
         const {get_inst, get_irkit, model} =  this.#appliances[appliance_name];
         if (! get_inst || ! get_irkit) {
