@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-const colors = require('colors'),
-    {Bit, Byte, Nibble} = require('./binary-tools')
+const {Bit, Byte, Nibble} = require('./binary-tools')
 
 class IrData2 {
     /**
