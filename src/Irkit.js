@@ -1,12 +1,9 @@
 "use strict";
 
 const EventEmitter = require("events");
-const axios = require('axios');
 const QueuePromise = require('queue-promise');
+const fetch = require('node-fetch'); // node@18 fetch gives "terminated" error upon reading IrKit json
 const ir_guess = require('./ir-guess');
-
-axios.defaults.headers.common = {};
-axios.defaults.headers.post = {};
 
 function sleep(msec) {
     return new Promise(resolve => {
@@ -14,6 +11,40 @@ function sleep(msec) {
     });
 }
 
+
+const FETCH_TIMEOUT_SEC = 5;
+
+/**
+ * fetch する
+ * @param {string} url
+ *      URL to fetch
+ * @param {object?} fetch_opts
+ *      for options: see https://developer.mozilla.org/en-US/docs/Web/API/fetch
+ * @return {Promise<{status:number,headers:object,body:string>}
+ *      returns a Promise that resolves into {status:*,headers:*,body:*} if successful or 4xx 
+ *      rejects on server not found or connection error
+ * @see https://qiita.com/sotasato/items/31be24d6776f3232c0c0
+ */
+async function mini_fetch(url, fetch_opts={}) {
+    // console.log("[fetch]", url);
+    const res = await fetch(url, Object.assign(
+        {   headers: {'X-Requested-With': 'curl'},
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_SEC * 1000),
+        }, fetch_opts));
+    const {status} = res;
+    const headers = Object.fromEntries(res.headers.entries());
+    let body;
+    try {
+        body = await res.text(); // empty body raises exceptions
+    }
+    catch(error) {
+        console.warn('failed to get response:'+error);
+    }
+    finally {
+        const out = {req: {url, fetch_opts}, status, headers, body};
+        return out;
+    }
+}
 class Irkit extends EventEmitter {
     #ip;
     #get_message_timer;
@@ -58,23 +89,23 @@ class Irkit extends EventEmitter {
     #poll_timer;
     #start_poll() {
         const poll_func = async () => {
-            if (this.#queue.shouldRun) {
-                console.warn(`send queue is running, next poll in ${this.#poll_interval} sec`);
+            const schedule_next_poll = () => {
                 this.#poll_timer = setTimeout(poll_func, this.#poll_interval * 1000);
-                return;
+            };
+            if (this.#queue.shouldRun) {
+                console.warn(`[BUSY] send queue is running (size=${this.#queue.size}), next poll in ${this.#poll_interval} sec`);
+                return schedule_next_poll();
             }
             try {
-                const response = await axios.request({
-                    method: 'get',
-                    url: `http://${this.#ip}/messages`,
-                    headers: { 'X-Requested-With': 'curl' },
+                const response = await mini_fetch(`http://${this.#ip}/messages`, {
+                    method: 'get'
                 });
-                const {status} = response;
-                if (response?.data) {
+                const {status, body} = response;
+                if (body) {
                     this.#set_healthy(true);
-                    const message = response.data;
+                    const message = JSON.parse(response.body);
                     try {
-                        const guessed = ir_guess(response.data?.data);
+                        const guessed = ir_guess(message?.data);
                         this.emit('message', {message, guessed});
                     }
                     catch (guess_error) {
@@ -84,19 +115,19 @@ class Irkit extends EventEmitter {
                 this.#undo_backoff();
 
                 // console.warn(`next poll in ${this.#poll_interval} sec`);
-                this.#poll_timer = setTimeout(poll_func, this.#poll_interval * 1000);
+                return schedule_next_poll();
             }
             catch (error) {
                 this.#backoff();
                 console.warn(`failed to get irkit messages : ${error} ; next poll in ${this.#poll_interval} sec`);
-                this.#poll_timer =  setTimeout(poll_func, this.#poll_interval * 1000);
                 this.#set_healthy(false);
+                return schedule_next_poll();
             }
         };
         console.warn(`starting poll in ${this.#poll_interval} sec`);
         this.#poll_timer = setTimeout(poll_func, this.#poll_interval * 1000);
     }    
-    stop_poll() {
+    #stop_poll() {
         console.log('stop polling');
         if (this.#poll_timer) {
             clearTimeout(this.#poll_timer);
@@ -114,22 +145,24 @@ class Irkit extends EventEmitter {
 
     // name of appliance we're current busy dealing with
     #sending_for_appliance_inst;
-    #get_queue_ready(new_appliance_inst) {
+    #ensure_ready(new_appliance_inst) {
         if (this.#sending_for_appliance_inst) {
             if (this.#sending_for_appliance_inst === new_appliance_inst) {
-                console.warn('🐾 clear queue');
+                // console.warn(`🐾 clear queue with size ${this.#queue.size}`);
                 this.#queue.clear();
+                this.#stop_poll();
                 return true;
             }
             else {
                 // this IrKit is currentl handling request for other appliances
-                console.warn(`🐾 currently busy sending signals for ${this.#sending_for_appliance_inst.constructor.name}`);
+                console.warn(`🐾 currently busy with ${this.#sending_for_appliance_inst.constructor.name}, queue size : ${this.#queue.size}`);
                 return false;
             }
         }  
         else {
-            console.warn('🐾 start dealing with ' + new_appliance_inst.constructor.name);
+            // console.warn('🐾 start processing queue items for ' + new_appliance_inst.constructor.name);
             this.#sending_for_appliance_inst = new_appliance_inst;
+            this.#stop_poll();
             return true;
         }
     }
@@ -141,10 +174,10 @@ class Irkit extends EventEmitter {
      * @return {Irkit} returns current instance
      */
     enqueue_single(single, appliance_inst) {
-        if (! this.#get_queue_ready(appliance_inst)) {
+        if (! this.#ensure_ready(appliance_inst)) {
             throw new Error('irkit is busy');
         }
-        // console.log("enqueue: single", JSON.stringify(single));
+        console.log("enqueue: single", JSON.stringify(single));
         const send_task = () => this.#post_message(single); 
         this.#queue.enqueue(send_task);
         return this;
@@ -156,7 +189,7 @@ class Irkit extends EventEmitter {
      * @return {Irkit} returns current instance
      */
     enqueue_multi(multi, appliance_inst) {
-        if (! this.#get_queue_ready(appliance_inst)) {
+        if (! this.#ensure_ready(appliance_inst)) {
             throw new Error('irkit is busy');
         }
         if (! Array.isArray(multi)) {
@@ -169,11 +202,11 @@ class Irkit extends EventEmitter {
                     console.log("sleep",sleep);
                     setTimeout(() => resolve(), sleep);
                 });
-                // console.log("enqueue: (multi) sleep task", sleep);
+                console.log("enqueue: (multi) sleep task", sleep);
                 this.#queue.enqueue(sleep_task);
             }
             else {
-                // console.log("enqueue: (multi) regular task");
+                console.log("enqueue: (multi) regular task");
                 // enqueue regular data 
                 const send_task = () => this.#post_message(m); 
                 this.#queue.enqueue(send_task);
@@ -218,6 +251,8 @@ class Irkit extends EventEmitter {
                 console.warn(`🐾 finished with ${this.#sending_for_appliance_inst.constructor.name}`);
                 this.#sending_for_appliance_inst = null;
                 cb_function();
+                this.#start_poll();
+                resolve();
             });
         };
         this.#queue.enqueue(cb_task);        
@@ -233,27 +268,23 @@ class Irkit extends EventEmitter {
      * @return {Promise}
      */
     async #post_message(payload, timeout=5, retry=5){
-        const axios_post = (url, payload, timeotu=5) => {
+        const do_post = (url, payload, timeout=5) => {
             return new Promise(async (resolve, reject) => {
-                let timeoutTimer = setTimeout(()=>{ 
-                    return reject({error: 'timeout'}); 
-                }, timeout * 1000);
                 try {
-                    const res = await axios.request({
-                        method: 'post',
-                        url,
-                        headers: { 'X-Requested-With': 'curl' },
-                        data: JSON.stringify(payload),
+                    const start_msec = Date.now();
+                    const res = await mini_fetch(url, {
+                        method: 'POST',
+                        cache: 'no-cache',
+                        body: JSON.stringify(payload),
                     });
-                    console.log("post completed");
-                    clearTimeout(timeoutTimer); 
+                    const {status} = res;
+                    console.log("📮 post completed in", Date.now() - start_msec,"msec, status=", status);
                     this.#set_healthy(true);
                     return resolve(res);
                 }
                 catch (error) {
                     this.#set_healthy(false);
-                    clearTimeout(timeoutTimer); 
-                    console.warn(`post error : ${error}`);
+                    console.warn(`📮 post error : ${error}`);
                     return reject({error});
                 }
             });
@@ -264,7 +295,7 @@ class Irkit extends EventEmitter {
         let wait_delay = 3;
         while (true) {
             try {
-                const response = await axios_post(`http://${this.#ip}/messages`, payload, timeout);
+                const response = await do_post(`http://${this.#ip}/messages`, payload, timeout);
                 this.#is_sending = false;
                 return {done: response?.status === 200};
             }
@@ -285,25 +316,17 @@ class Irkit extends EventEmitter {
         }
     }
     static is_irkit(ip) {
-        return new Promise((resolve, reject) => {
+        console.log("examining", ip);
+        return new Promise(async (resolve, reject) => {
             try {
-                const response = axios.request({
-                    method: 'get',
-                    url: `http://${ip}`,
-                    headers: { 'X-Requested-With': 'curl' },
-                    validateStatus: (status) => status === 404,
-                }).then(response => {
-                    if ((response.headers?.server ?? '').match(/^IRKit\//)){
+                const response = await mini_fetch(`http://${ip}/`,{ method: 'get' });
+                if ((response.headers?.server ?? '').match(/^IRKit\//)){
                         return resolve(true);
-                    }
-                    else {
-                        console.warn(`${ip} did not respond with IRKit response header`);
-                        return resolve(false);
-                    }
-                }).catch(error=> {
-                    console.warn('axios error :',error);
-                    return reject({error});
-                });
+                }
+                else {
+                    console.warn(`${ip} did not respond with IRKit response header`);
+                    return resolve(false);
+                }
             } catch (error) {
                 console.warn('raised error :',error);
                 return reject({error});

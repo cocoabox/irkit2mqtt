@@ -168,25 +168,22 @@ class IrkitAppliance extends EventEmitter {
         timeout_sec ??= 60;
         console.log("💬 send() :", JSON.stringify(this.states),'⏱️ sec :', timeout_sec);
         return new Promise((send_all_done, reje) => {
-            const timeout_timer = setTimeout(() => {
+            let timeout_timer = setTimeout(() => {
                 console.warn('💬 🔥 send() timeout'); 
                 reje({timeout: 1});
             }, timeout_sec * 1000);
-            const kill_timer = () => {
-                clearTimeout(timeout_timer);
-            };
             let irkit_data;
             try {
                 irkit_data = this.generate_irkit_data();
                 if (! irkit_data) {
-                    kill_timeout();
+                    clearTimeout(timeout_timer);
                     console.warn('generate_irkit_data() returned nothing');
                     throw new Error('empty irkit data returned from: generate_irkit_data()');
                 }
             }
             catch (error) {
                 console.warn('💬⚠️ failed to generate irkit data because', error.stack);
-                kill_timeout();
+                clearTimeout(timeout_timer);
                 return reje({error});
             }
             try {
@@ -197,13 +194,13 @@ class IrkitAppliance extends EventEmitter {
                     this.#irkit.enqueue_multi(multi, this);
             }
             catch (error) {
+                clearTimeout(timeout_timer);
                 console.warn('💬⚠️ error eneuquing messages :', error);
-                kill_timeout();
                 return reje({error});
             }
             this.#irkit.enqueue_done_callback(() => {
                 console.log('💬 🟢 all send done');
-                kill_timeout();
+                clearTimeout(timeout_timer);
                 return send_all_done();
             });
         }); 
@@ -224,6 +221,7 @@ class IrkitAppliance extends EventEmitter {
      * @param {Array?} args
      */
     do_action(action_name, args=[]) {
+        console.log(`🏃action "${action_name}" start`);
         return new Promise((send_all_done, reje) => {
 
             if (! (action_name in this.constructor.actions)) {
@@ -272,9 +270,12 @@ class IrkitAppliance extends EventEmitter {
                 else if (multi) {
                     this.#irkit.enqueue_multi(multi, this);
                 }
-                this.#irkit.enqueue_callback(send_all_done);
+                this.#irkit.enqueue_done_callback(() => {
+                    console.log(`🏃🟢 action "${action_name}" done`);
+                    send_all_done();
+                });
             } catch (error) {
-                console.warn('⚠️ error eneuquing messages :', error);
+                console.warn('🏃🟢⚠️  action execution error :', error);
                 return reje({error: 'busy'});
             }
         });
