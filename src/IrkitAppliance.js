@@ -31,6 +31,28 @@ class IrkitAppliance extends EventEmitter {
         // to be implemented by child
         throw new Error('interface() is not implemented');
     }
+    remove_invalid_states() {
+        let removed_cnt = 0;
+        for (const [state_name, state_val] of Object.entries(this.#states)) {
+            try {
+                const validate_res = this.#validate_state(state_name, state_val, this.#states);
+                if (validate_res === false) {
+                    console.warn(`${this.constructor.name}.#states.${state_name} deemed invalid and will be removed :`, state_val);
+                    delete this.#states[state_name];
+                    ++removed_cnt;
+                }
+            }
+            catch (error) {
+                console.error(`🔥 while validating ${this.constructor.name}.#states.${state_name} ; value : ${state_val}, exception raised :`, error);
+                delete this.#states[state_name];
+                ++removed_cnt;
+            }
+        }
+        if (removed_cnt) {
+            console.warn(`⚠️  validate_states() removed ${removed_cnt} invalid state values`);
+        }
+    }
+
     #validate_state(state_name, state_value, setting_states=null) {
         const rule = this.constructor.interface?.[state_name];
         if (! rule) {
@@ -98,10 +120,6 @@ class IrkitAppliance extends EventEmitter {
 
     internal_set_state(state_name, state_value, setting_states={}) {
         try {
-            if (false === this.#validate_state(state_name, state_value, setting_states)) {
-                console.warn('✘ failed to validate state :', state_name);
-                return false;
-            }
             this.#states[state_name] = state_value;
             
             this.#state_updated_springload_timer_clear();
@@ -129,6 +147,7 @@ class IrkitAppliance extends EventEmitter {
         for (const [state_name, state_value] of Object.entries(state_name_value_pairs)) {
             console.log('[set states]', state_name, state_value);
             if (! this.internal_set_state(state_name, state_value, state_name_value_pairs)) {
+                console.warn(`⚠️ failed to set ${state_name} =>`, state_value);
                 return false;
             }
         }

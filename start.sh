@@ -25,13 +25,13 @@ if [[ ! -z "$LOG_LOCATION" ]]; then
 fi
 LOGROTATE_DATE_FORMAT="%Y-%m-%d"
 
-IFS='' /usr/bin/env node "$DIR/src" "$CONF_FILE" 2>&1 | while read LINE; do
+IFS=""; while read LINE; do
     if [[ -z "$LOG_LOCATION" ]]; then
         echo "$LINE"
     else 
         echo "$LINE" >> "$LOG_LOCATION"
     fi    
-done &
+done < <( /usr/bin/env node "$DIR/src" "$CONF_FILE" 2>&1 ) &
 
 PID=$!
 

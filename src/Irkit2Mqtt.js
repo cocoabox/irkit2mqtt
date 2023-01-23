@@ -74,8 +74,9 @@ class Irkit2Mqtt extends MqttClient {
 
         this.#topic_prefix = this.config?.topic_prefix ?? 'irkit2mqtt';
 
-        this.incoming_topic_pattern = /([^\/]+)\/((do)\/([^\/]+)|(set)|(ex)\/([^\/]+)\/set)$/;
+        this.incoming_topic_pattern = /(__hello__|([^\/]+)\/((do)\/([^\/]+)|(set)|(ex)\/([^\/]+)\/set))$/;
         this.mqtt_subscribe([
+            `${this.#topic_prefix}/__hello__`,
             `${this.#topic_prefix}/+/set`,
             `${this.#topic_prefix}/+/do/+`,
             `${this.#topic_prefix}/+/ex/+/set`,  // expanded topic
@@ -107,6 +108,7 @@ class Irkit2Mqtt extends MqttClient {
             );
             this.#setup_discovery();
             this.#setup_interval_pub();
+            this.#setup_metrics_report();
         });
     }
     async close({force}) {
@@ -161,6 +163,12 @@ class Irkit2Mqtt extends MqttClient {
         return new_inst;
     }
     #get_irkit_inst(name) {
+        if (! name) {
+            console.warn('attempted to get_irkit_inst(NULL) in ', (new Error).stack);
+            console.warn('- irkits:', this.#irkits);
+            console.warn('- appliances:', this.#appliances);
+            return;
+        }
         if (! (name in this.#irkits)) {
             throw new Error(`🔥 irkit ${name} is not defined`);
         }
@@ -194,6 +202,21 @@ class Irkit2Mqtt extends MqttClient {
 
         const discovery_func = async () => {
             if (this.#discovering) return;
+
+            // do we need discover?
+            let need_discovery = false;
+            for (const [irkit_name, i] of Object.entries(this.#irkits)) {
+                const {inst} = i;
+                if (! inst || ! inst.health) {
+                    need_discovery = true;
+                    break;
+                }
+            }
+            if (! need_discovery) {
+                console.log("[discover] all good ; no need");
+                return;
+            }
+
             this.#discovering = true;
             console.log("[discover] this.#irkits = ", this.#irkits);
 
@@ -302,25 +325,28 @@ class Irkit2Mqtt extends MqttClient {
 
     mqtt_publish(topic, body, {publish_opts,wait_connect_timeout}={}) {
         const wait_msec_after = wait_msec_after_publish;
-        super.mqtt_publish(topic, body, {publish_opts,wait_connect_timeout,wait_msec_after});
+        return super.mqtt_publish(topic, body, {publish_opts,wait_connect_timeout,wait_msec_after});
     }
 
     async mqtt_on_message(topic, message_obj) {
         const mat = topic.match(this.incoming_topic_pattern);
-        const appliance_name = mat?.[1];
+        const appliance_name = mat?.[2];
         let topic_type;
         let ex_state_name;
         let action_name;
-        if (mat?.[5] === 'set') {
+        if (mat?.[1] === '__hello__') {
+            return this.#publish_all_appliances();
+        }
+        else if (mat?.[6] === 'set') {
             topic_type = 'set';
         }
-        else if (mat?.[6] === 'ex') {
+        else if (mat?.[7] === 'ex') {
             topic_type = 'ex';
-            ex_state_name = mat?.[7];
+            ex_state_name = mat?.[8];
         }
-        else if (mat?.[3] === 'do') {
+        else if (mat?.[4] === 'do') {
             topic_type = 'do';
-            action_name = mat?.[4];
+            action_name = mat?.[5];
         }
         else {
             console.warn('topic doesnt match any known patterns (set,ex,do) :', topic);
@@ -374,41 +400,65 @@ class Irkit2Mqtt extends MqttClient {
                     }
                     break;
                 default:
-                    console.warn(`unsupported operation : ${op}`);
+                    console.warn(`unsupported operation : ${topic_type}`);
             }
         }
         catch (error) {
             console.warn('uncaught exception when processing appliance message', error);
             this.mqtt_publish(`${topic}/result`, "error");
         }
-
+    }
+    async #publish_all_appliances() {
+        console.log('publishing ALL appliance statuses');
+        for (const appliance_name of Object.keys(this.#appliances)) {
+            await this.#publish_appliance_status(appliance_name);
+        }
     }
 
-    #send_springload_timers;
+    #send_springload_timers; // = { appliance_name: {timer:*, resolve:*, reject:*}
     #send_springload_set(appliance_name, wait_sec) {
-        if (! this.#send_springload_timers) {
-            this.#send_springload_timers = {};
-        }
-        this.#send_springload_timers[appliance_name] = setTimeout(() => {
-            console.log(`[springload] sending to ${appliance_name} at`, iso_date());
-            const inst = this.#get_appliance_inst(appliance_name);
-            inst?.send().then(() => {
-                console.log('[springload] sending completed');
+        return new Promise((resolve, reject) => {
+            if (! this.#send_springload_timers) {
+                this.#send_springload_timers = {};
             }
-            ).catch(error => {
-                console.warn('[springload] sending failed :', error);
-            });
-            delete this.#send_springload_timers[appliance_name];
+            const timer = setTimeout(() => {
+                delete this.#send_springload_timers[appliance_name];
+                console.log(`[springload] sending to ${appliance_name} at`, iso_date());
+                const inst = this.#get_appliance_inst(appliance_name);
+                if (!inst) return;
+                console.log('[springload] validating states');
+                inst.remove_invalid_states();
 
-        }, (wait_sec ?? 3) * 1000);
-        console.log(`[springload] ${wait_sec} secs, starting now :`, iso_date());
+                console.log('[springload] ⚡️ sending states', inst.states);
+
+                inst.send().then(() => {
+                    console.log('[springload] sending completed');
+                    resolve();
+                }
+                ).catch(error => {
+                    console.warn('[springload] sending failed :', error);
+                    reject();
+                });
+            }, (wait_sec ?? 3) * 1000);
+
+            this.#send_springload_timers[appliance_name] = {timer, resolve, reject};
+
+            console.log(`[springload] ${wait_sec} secs, starting now :`, iso_date());
+        });
     }
     #send_springload_clear(appliance_name) {
         console.log(`[springload] clearing ${appliance_name}`);
         if (! this.#send_springload_timers) {
             this.#send_springload_timers = {};
         }
-        delete this.#send_springload_timers[appliance_name];
+        const existing = this.#send_springload_timers[appliance_name];
+        if (existing) {
+            const {timer, resolve, reject} = existing;
+            console.log(`[springload] clearing ${appliance_name}`);
+            clearTimeout( timer );
+            resolve('later');
+            delete this.#send_springload_timers[appliance_name];
+        }
     }
 
     /**
@@ -542,8 +592,17 @@ class Irkit2Mqtt extends MqttClient {
         // in the clear for 3 seconds (config.springload_sec) before sending any IR
         // messages
         this.#send_springload_clear(appliance_name);
-        this.#send_springload_set(appliance_name, this.config?.springload_sec ?? 3);
-        // return error (or return undefined for no error)
+        try {
+            const springload_result = await this.#send_springload_set(appliance_name, this.config?.springload_sec ?? 3);
+            // ^ may be "later" or undefined
+            if (!springload_result || 'later' === springload_result) return;
+            // return error (or return undefined for no error)
+            else return springload_result;
+        }
+        catch (error) {
+            console.warn('#send_springload_set raised an exception', error);
+            return 'error';
+        }
     }
 
     async #appliance_do(appliance_name, action_name, arg_array) {
@@ -690,9 +749,24 @@ class Irkit2Mqtt extends MqttClient {
             }
 
         };
-
         this.#interval_pub_timer = setInterval(pub_func,
-            (this.config.update_interval || 120) * 1000);
+            (this.config.update_interval ?? 120) * 1000);
+    }
+    #metrics_report_timer;
+    #setup_metrics_report() {
+        if (this.#metrics_report_timer) {
+            clearInterval(this.#metrics_report_timer);
+        }
+        this.#metrics_report_timer = setInterval(async () => {
+            for(const irkit_name of Object.keys(this.#irkits)) {
+                const irkit_inst = this.#get_irkit_inst(irkit_name);
+                if (irkit_inst) {
+                    const dev_metrics = irkit_inst.metrics;
+                    console.log(`[metrics] irkit ${irkit_name} report :`, dev_metrics);
+                    await this.mqtt_publish(`${this.#topic_prefix}/__irkit__/${irkit_name}/metrics`, dev_metrics);
+                }
+            }
+        }, (this.config.metrics_interval ?? 120) * 1000);
     }
 }
 

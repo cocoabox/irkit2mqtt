@@ -136,12 +136,21 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             },
         };
     }
+    remove_invalid_states() {
+        super.remove_invalid_states();
+        if (this.states.mode !== 'normal') {
+            if ('r' in this.states || 'g' in this.states || 'b' in this.states) {
+                delete this.states.r;
+                delete this.states.g;
+                delete this.states.b;
+                console.warn('deleted states : r,g,b because we are in non-normal modes');
+            }
+        }
+    }
 
     after_set_state() {
-        if ('off' === this.get_state('mode')) {
-            this.internal_set_state('brightness', 0);
-        }
-    }    
+    }
+
     static brightness_range(mode) {
         switch (mode) {
             case 'off': return [0, 0];
@@ -169,7 +178,7 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             .terminate_frame()
             .append_repeats(repeats)
             .to_irkit_data();
-        console.log('adding:', JSON.stringify(irkit_dict));
+        // console.log('adding:', JSON.stringify(irkit_dict));
         return irkit_dict;
     }
 
@@ -182,9 +191,9 @@ class ToshibaCeilingLamp extends IrkitAppliance {
             steps.push({sleep: msec});
         };
         const add_key = (key_name, repeats=0) => {
-            console.log(`# add key: ${key_name}` + (repeats ? ` with ${repeats} repeats` : ''));
+            console.log(`📶 add key: ${key_name}` + (repeats ? ` with ${repeats} repeats` : ''));
             const irkit_dict = this.#get_irkit_dict(key_name, repeats);
-            console.log('# adding:', JSON.stringify(irkit_dict));
+            // console.log('# adding:', JSON.stringify(irkit_dict));
             steps.push(irkit_dict);
         };
         // brightness/color temp: press key_up/key_down until we reach wanted_level 
@@ -291,7 +300,7 @@ class ToshibaCeilingLamp extends IrkitAppliance {
         const mode = this.get_state('mode', 'normal');
         const wanted_brightness = this.get_state('brightness', null);
         let adjust_brightness = true;
-        if (mode === 'normal' && 0 === wanted_brightness) {
+        if (mode === 'off' || (mode === 'normal' && 0 === wanted_brightness)) {
             add_key('off');
             adjust_brightness = false;
         }

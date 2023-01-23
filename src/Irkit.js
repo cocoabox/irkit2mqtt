@@ -2,7 +2,9 @@
 
 const EventEmitter = require("events");
 const QueuePromise = require('queue-promise');
-const fetch = require('node-fetch'); // node@18 fetch gives "terminated" error upon reading IrKit json
+const node_fetch = require('node-fetch'); // node@18 fetch gives "terminated" error upon reading IrKit json
+const fifo_array = require('fifo-array');
+
 const ir_guess = require('./ir-guess');
 
 function sleep(msec) {
@@ -11,8 +13,7 @@ function sleep(msec) {
     });
 }
 
-
-const FETCH_TIMEOUT_SEC = 5;
+const LAST_RESPONSE_TIMES_SIZE = 50;
 
 /**
  * fetch する
@@ -20,17 +21,28 @@ const FETCH_TIMEOUT_SEC = 5;
  *      URL to fetch
  * @param {object?} fetch_opts
  *      for options: see https://developer.mozilla.org/en-US/docs/Web/API/fetch
+ * @param {number=20}  fetch_opts.timeout
+ *      timeout in sec
  * @return {Promise<{status:number,headers:object,body:string>}
  *      returns a Promise that resolves into {status:*,headers:*,body:*} if successful or 4xx 
  *      rejects on server not found or connection error
+ *      rejects with AbortError on timeout
  * @see https://qiita.com/sotasato/items/31be24d6776f3232c0c0
  */
-async function mini_fetch(url, fetch_opts={}) {
+async function fetch(url, opts={}) {
+    const {add_metric_response_time, add_metric_error} = opts;
+    const timeout_sec = opts.timeout ?? 20;
     // console.log("[fetch]", url);
-    const res = await fetch(url, Object.assign(
-        {   headers: {'X-Requested-With': 'curl'},
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_SEC * 1000),
-        }, fetch_opts));
+    const fetch_opts =  Object.assign({   
+        headers: {'X-Requested-With': 'curl'},
+        signal: AbortSignal.timeout(timeout_sec * 1000),
+    }, opts);
+    const start_time = Date.now();
+    // console.log(url);
+    const res = await node_fetch(url, fetch_opts);
+    if (typeof add_metric_response_time === 'function') {
+        add_metric_response_time(Date.now() - start_time); 
+    }
     const {status} = res;
     const headers = Object.fromEntries(res.headers.entries());
     let body;
@@ -39,12 +51,14 @@ async function mini_fetch(url, fetch_opts={}) {
     }
     catch(error) {
         console.warn('failed to get response:'+error);
+        if (typeof add_metric_error === 'function') add_metric_error();
     }
     finally {
         const out = {req: {url, fetch_opts}, status, headers, body};
         return out;
     }
-}
+}    
+
 class Irkit extends EventEmitter {
     #ip;
     #get_message_timer;
@@ -53,7 +67,8 @@ class Irkit extends EventEmitter {
     #poll_interval;
     #min_poll_interval;
     #healthy;
-    constructor(ip, {poll_interval} = {}) {
+    #irkit_timeout;
+    constructor(ip, {poll_interval,irkit_timeout} = {}) {
         super();
         this.#ip = ip;
         this.#is_sending = false;
@@ -63,10 +78,79 @@ class Irkit extends EventEmitter {
             start: true,
         });
         this.#poll_interval = poll_interval ?? 5;
+        this.#irkit_timeout = irkit_timeout ?? 20;
         this.#min_poll_interval = this.#poll_interval;
         this.#healthy= true;
         this.#start_poll();
+        this.#setup_report_metrics();
     }
+
+    async #fetch(url, opts={}) {
+        opts = Object.assign({
+            add_metric_response_time : this.#add_metric_response_time.bind(this),
+            add_metric_error: this.#add_metric_error.bind(this),
+        }, opts);
+        return await fetch(url, opts);
+    }
+
+    //
+    // todo : refactor raw_metrics and report metrics
+    //
+    #raw_metrics;
+    #add_metric(metric_name, metric_value) {
+        if (! this.#raw_metrics) {
+            this.#raw_metrics = {};
+        }
+        if (! (metric_name in this.#raw_metrics)) {
+            this.#raw_metrics[metric_name] = [];
+        }
+        this.#raw_metrics[metric_name].push({metric_value, date:Date.now()});
+    }
+    #add_metric_error() { this.#add_metric('errors', 1); }
+    #add_metric_response_time(res_time) { 
+        // console.log("add res time", res_time);
+        this.#add_metric('response_times', res_time); 
+    }
+    #metrics;
+    #setup_report_metrics() {
+        if (! this.#raw_metrics) {
+            this.#raw_metrics = {};
+        }
+        setInterval(() => {
+            const duration = 10;
+            // remove everything older than 10 mins ago
+            Object.values(this.#raw_metrics).forEach(arr => {
+                const ten_mins_ago = Date.now() - 60 * duration * 1000;
+                const ten_mins_ago_idx = arr.findIndex(l => l.date < ten_mins_ago);
+                arr.splice(0, ten_mins_ago_idx);
+            });
+
+            if (! this.#raw_metrics.response_times)
+                this.#raw_metrics.response_times = [];
+            if (! this.#raw_metrics.errors)
+                this.#raw_metrics.errors = [];
+
+            this.#metrics = {
+                duration,
+                response_times: {
+                    cnt: this.#raw_metrics.response_times.length,
+                    avg: this.#raw_metrics.response_times.length === 0 ? 0 : ( 
+                        this.#raw_metrics.response_times.reduce((accum, cur) => accum + cur.metric_value, 0) / 
+                        this.#raw_metrics.response_times.length
+                    ),
+                },
+                errors: {
+                    cnt: this.#raw_metrics.errors.length,
+                },
+            };
+            //console.log("[METRICS] raw", this.#raw_metrics);
+            //console.log("[METRICS] final", this.#metrics);
+        }, 60 * 1000);
+    }
+    get metrics() {
+        return this.#metrics ?? {};
+    }
+
     #set_healthy(h) {
         const prev_healthy = this.#healthy;
         this.#healthy = h;
@@ -97,7 +181,7 @@ class Irkit extends EventEmitter {
                 return schedule_next_poll();
             }
             try {
-                const response = await mini_fetch(`http://${this.#ip}/messages`, {
+                const response = await this.#fetch(`http://${this.#ip}/messages`, {
                     method: 'get'
                 });
                 const {status, body} = response;
@@ -119,7 +203,7 @@ class Irkit extends EventEmitter {
             }
             catch (error) {
                 this.#backoff();
-                console.warn(`failed to get irkit messages : ${error} ; next poll in ${this.#poll_interval} sec`);
+                console.warn(`failed to get irkit messages : ${error} ; next poll in ${this.#poll_interval} sec`, error.stack);
                 this.#set_healthy(false);
                 return schedule_next_poll();
             }
@@ -272,7 +356,7 @@ class Irkit extends EventEmitter {
             return new Promise(async (resolve, reject) => {
                 try {
                     const start_msec = Date.now();
-                    const res = await mini_fetch(url, {
+                    const res = await this.#fetch(url, {
                         method: 'POST',
                         cache: 'no-cache',
                         body: JSON.stringify(payload),
@@ -300,7 +384,7 @@ class Irkit extends EventEmitter {
                 return {done: response?.status === 200};
             }
             catch (error) {
-                console.warn('failed to post irkit messages :' + JSON.stringify(error));
+                console.warn('📮🔥 failed to post irkit messages :' + JSON.stringify(error));
                 if (retry && attempt < retry) {
                     attempt++;
                     console.warn('will retry', attempt, '/', retry, '; wait [sec]', wait_delay);
@@ -319,9 +403,9 @@ class Irkit extends EventEmitter {
         console.log("examining", ip);
         return new Promise(async (resolve, reject) => {
             try {
-                const response = await mini_fetch(`http://${ip}/`,{ method: 'get' });
+                const response = await fetch(`http://${ip}/`,{ method: 'get' });
                 if ((response.headers?.server ?? '').match(/^IRKit\//)){
-                        return resolve(true);
+                    return resolve(true);
                 }
                 else {
                     console.warn(`${ip} did not respond with IRKit response header`);
