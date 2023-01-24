@@ -9,7 +9,7 @@ class IrkitAppliance extends EventEmitter {
     #irkit;
     #setup;
     #states;
-    constructor(irkit_inst, setup) {
+    constructor(irkit_inst, setup, restore_state_cache) {
         super();
 
         if (! (irkit_inst instanceof Irkit)) {
@@ -18,6 +18,10 @@ class IrkitAppliance extends EventEmitter {
         this.#irkit = irkit_inst
         this.#setup = setup;
         this.#states = {};
+        if (restore_state_cache && typeof restore_state_cache === 'object') {
+            console.log(`restoring state cache to:`, restore_state_cache);
+            this.set_states(restore_state_cache);
+        }
     }
     get setup() {
         return this.#setup;

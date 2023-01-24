@@ -181,6 +181,31 @@ Message body depends on the field. Usually it is plain value e.g. `unquoted stri
 Send a message to this topic to update its internal states. This is reserved for platforms like Home Assistant mqtt.
 
 
+## published topic `irkit2mqtt/__irkit__/{IRKIT_NAME}/metrics`
+
+Published every 10 minute for recent IRKit comm metrics. Example:
+
+```
+{
+  "duration": 10,
+  "response_times": {
+    "cnt": 98,
+    "avg": 464.83673469387753
+  },
+  "errors": {
+    "cnt": 0
+  }
+}
+```
+
+| field | type | meaning |
+| ----- | ---- | ------- |
+| `.duration` | number | duration in minutes in which the following metrics are derived |
+| `.response_times.cnt` | number | number of requests made |
+| `.response_times.avg` | number | average response time in milliseconds |
+| `.errors.cnt` | number | number of failed requests |
+
+
 Plugins 
 ========
 

@@ -77,6 +77,14 @@ class Irkit extends EventEmitter {
             interval: 200,
             start: true,
         });
+        this.#queue.on('start', () => {
+            console.warn('[Queue] start');
+            this.#stop_poll();
+        });
+        this.#queue.on('end', () => {
+            console.warn('[Queue] end ; current queue size :', this.#queue.size);
+            this.#start_poll();
+        });
         this.#poll_interval = poll_interval ?? 5;
         this.#irkit_timeout = irkit_timeout ?? 20;
         this.#min_poll_interval = this.#poll_interval;
@@ -121,7 +129,7 @@ class Irkit extends EventEmitter {
             // remove everything older than 10 mins ago
             Object.values(this.#raw_metrics).forEach(arr => {
                 const ten_mins_ago = Date.now() - 60 * duration * 1000;
-                const ten_mins_ago_idx = arr.findIndex(l => l.date < ten_mins_ago);
+                const ten_mins_ago_idx = arr.findIndex(l => l.date > ten_mins_ago);
                 arr.splice(0, ten_mins_ago_idx);
             });
 
@@ -209,7 +217,8 @@ class Irkit extends EventEmitter {
             }
         };
         console.warn(`starting poll in ${this.#poll_interval} sec`);
-        this.#poll_timer = setTimeout(poll_func, this.#poll_interval * 1000);
+        if (! this.#poll_timer) 
+            this.#poll_timer = setTimeout(poll_func, this.#poll_interval * 1000);
     }    
     #stop_poll() {
         console.log('stop polling');
@@ -234,19 +243,20 @@ class Irkit extends EventEmitter {
             if (this.#sending_for_appliance_inst === new_appliance_inst) {
                 // console.warn(`🐾 clear queue with size ${this.#queue.size}`);
                 this.#queue.clear();
-                this.#stop_poll();
                 return true;
             }
             else {
-                // this IrKit is currentl handling request for other appliances
-                console.warn(`🐾 currently busy with ${this.#sending_for_appliance_inst.constructor.name}, queue size : ${this.#queue.size}`);
-                return false;
+                console.warn(`🐾 enqueue anyway for ${new_appliance_inst.constructor.name}`);
+                this.enqueue_callback(() => {
+                    console.warn(`🐾 will now process ${new_appliance_inst.constructor.name}, queue size : ${this.#queue.size}`);
+                    this.#sending_for_appliance_inst = new_appliance_inst;
+                });
+                return true;
             }
         }  
         else {
             // console.warn('🐾 start processing queue items for ' + new_appliance_inst.constructor.name);
             this.#sending_for_appliance_inst = new_appliance_inst;
-            this.#stop_poll();
             return true;
         }
     }
@@ -335,7 +345,6 @@ class Irkit extends EventEmitter {
                 console.warn(`🐾 finished with ${this.#sending_for_appliance_inst.constructor.name}`);
                 this.#sending_for_appliance_inst = null;
                 cb_function();
-                this.#start_poll();
                 resolve();
             });
         };

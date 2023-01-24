@@ -92,21 +92,28 @@ class SharpA909JBIrData extends IrData2 {
 
 class SharpA909JB extends IrkitAppliance {
 
-    constructor(irkit_inst, setup) {
-        super(irkit_inst, Object.assign({simple: true}, setup));
-        this.set_states({
-            power: false,
-            temp:25,
-            mode: 'cool',
-            timer:'unset',
-            timer_hours:0,
-            direction: 'auto',
-            strength: 'auto',
-            internal_clean: true,
-            ion: true,
-            power_saving: false,
-            simple: this.setup.simple,
-        });
+    constructor(irkit_inst, setup, restore_state_cache={}) {
+        super(irkit_inst, Object.assign({simple: true}, setup, restore_state_cache));
+        if (restore_state_cache
+            && typeof restore_state_cache === 'object'
+            && Object.keys(restore_state_cache) > 0) {
+            // restored cache
+        }
+        else {
+            this.set_states({
+                power: false,
+                temp:25,
+                mode: 'cool',
+                timer:'unset',
+                timer_hours:0,
+                direction: 'auto',
+                strength: 'auto',
+                internal_clean: true,
+                ion: true,
+                power_saving: false,
+                simple: this.setup.simple,
+            });
+        }
     }
     static get appliance_type()  { return 'air-conditioner'; }
     static get interface() {

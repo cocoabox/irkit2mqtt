@@ -35,7 +35,7 @@ function plugin_find(model, type='appliance') {
     if (! plugin_key) 
         throw new Error(`expecting type to be either "appliance" or "mqtt_rewrite"; got : ${type}`);
 
-    return plugins.find(p => p.type === type && p.plugin.model === model).plugin[plugin_key];
+    return plugins.find(p => p?.type === type && p?.plugin.model === model)?.plugin[plugin_key];
 }
 
 function iso_date() {
@@ -154,8 +154,9 @@ class Irkit2Mqtt extends MqttClient {
             console.warn(`🔥 appliance ${name} : no such plugin : ${model}`);
             return;
         }
-        console.log(`instantiating ${model} with name ${name}`);
-        const new_inst = new appliance_class(irkit_inst, setup);
+        const cache = this.#load_cache(name);
+        console.log(`instantiating ${model} with name ${name} with state-cache :`, cache);
+        const new_inst = new appliance_class(irkit_inst, setup, cache);
         this.#appliances[name].inst = new_inst 
         new_inst.on('state-updated', (states) => {
             this.#on_appliance_state_updated(name, states);
@@ -430,7 +431,7 @@ class Irkit2Mqtt extends MqttClient {
                 inst.remove_invalid_states();
 
                 console.log('[springload] ⚡️ sending states', inst.states);
-
+                this.#update_state_cache(appliance_name, inst.states);
                 inst.send().then(() => {
                     console.log('[springload] sending completed');
                     resolve();
@@ -680,7 +681,8 @@ class Irkit2Mqtt extends MqttClient {
             from255scale,
             appliance: inst,
         };        
-        if (Object.keys(expa).length === 0) {
+        if (! expa || Object.keys(expa).length === 0) {
+            console.log('no rewrite plugins (or empty) for', appliance_name);
             return;
         }
         console.log('appliance status update (individual) :', appliance_name);
@@ -767,6 +769,43 @@ class Irkit2Mqtt extends MqttClient {
                 }
             }
         }, (this.config.metrics_interval ?? 120) * 1000);
+    }
+
+    #state_cache_save_springload_timer;
+    #state_cache;
+    #update_state_cache(appliance_name, states) {
+        const state_cache_save_springload_delay_sec = 30; // write state cache to disk at least 30 secs apart
+        if(! this.#state_cache) {
+            this.#state_cache = {};
+        }
+        this.#state_cache[appliance_name] = {... states};
+        if (this.#state_cache_save_springload_timer) {
+            clearTimeout(this.#state_cache_save_springload_timer);
+        }
+        console.log(`[cache] springload write cache in ${state_cache_save_springload_delay_sec} sec`);
+        this.#state_cache_save_springload_timer = setTimeout(() => {
+            const storage_dir = this.config.storage_dir;
+            if (! storage_dir) {
+                console.log('[cache] skipping because config.storage_dir is empty');
+                return;
+            }
+            const cache_path = `${storage_dir}/state-cache.json`;
+            console.log('[cache] write cache to:', cache_path);
+            fs.writeFileSync(cache_path, JSON.stringify(this.#state_cache), 'utf8');
+        }, state_cache_save_springload_delay_sec * 1000);
+    }
+    #load_cache(appliance_name) {
+        try {
+            const storage_dir = this.config.storage_dir;
+            if (! storage_dir) return;
+            const cache_path = `${storage_dir}/state-cache.json`;
+            const cache_dict = JSON.parse(fs.readFileSync(cache_path, 'utf8'));
+            const out = cache_dict[appliance_name];
+            return out;
+        }
+        catch (error) {
+            return;
+        }
     }
 }
 
