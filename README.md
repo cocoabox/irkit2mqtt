@@ -1,3 +1,11 @@
+irkit2mqtt
+==========
+
+![](topic-screenshot.png)
+
+Allows IRKits and IRKit-controlled appliances (Air-cond, TV, lights, ..) to appear stateful and 
+operable using MQTT.
+
 PREREQUESITES
 =============
 
