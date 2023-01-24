@@ -20,6 +20,26 @@ INSTALLING
 1. run `install-service.sh` to enable systemd service and start running
 
 
+RUNNING
+=======
+
+once the systemd service installed (via `install-service.sh`) you can start the service by issuing :
+
+`sudo systemctl restart irkit2mqtt`
+
+or, to stop the service :
+
+`sudo systemctl stop irkit2mqtt`
+
+Logs are logged into the path specified in `conf/log-location.txt`. 
+
+To run without sytemd, issue command
+
+`./start.sh`
+
+and press ^C (or run `./stop.sh`) to exit.
+
+
 ON APPLIANCES
 =============
 

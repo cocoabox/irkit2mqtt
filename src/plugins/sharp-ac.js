@@ -92,14 +92,9 @@ class SharpA909JBIrData extends IrData2 {
 
 class SharpA909JB extends IrkitAppliance {
 
-    constructor(irkit_inst, setup, restore_state_cache={}) {
+    constructor(irkit_inst, setup, restore_state_cache) {
         super(irkit_inst, Object.assign({simple: true}, setup, restore_state_cache));
-        if (restore_state_cache
-            && typeof restore_state_cache === 'object'
-            && Object.keys(restore_state_cache) > 0) {
-            // restored cache
-        }
-        else {
+        if (! restore_state_cache) {
             this.set_states({
                 power: false,
                 temp:25,
