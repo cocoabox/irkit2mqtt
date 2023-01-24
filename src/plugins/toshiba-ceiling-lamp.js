@@ -24,8 +24,8 @@ class ToshibaFRC205TIrData extends IrData2 {
     constructor() {
         super(630,                // T = 630 μs
             ['16T-high', '8T'],   // leader pulses/spaces
-            ['1T-high', '1T'],    // bit 1
-            ['1T-high', '3T'],    // bit 0
+            ['1T-high', '3T'],    // bit 1
+            ['1T-high', '1T'],    // bit 0
             '1T',                 // stop pulse
             121510,               // data frame length (μs)
             [['15.87T-high', '3.87T', '1.12T'], ['17T-high', '3.87T', '1.12T']],
@@ -36,8 +36,8 @@ class ToshibaFRC205TIrData extends IrData2 {
 }
 
 const customer_code = [
-    [0, 0, 0, 1, 1, 0, 0, 0],
-    [1, 1, 0, 0, 1, 1, 1, 1]
+    [1,1,1,0,0,1,1,1],
+    [0,0,1,1,0,0,0,0]
 ];
 
 //
@@ -68,31 +68,81 @@ class ToshibaCeilingLamp extends IrkitAppliance {
     static get appliance_type() {
         return 'light';
     }
+    incoming_signal({message, guessed}) {
+        if (! guessed) return;
+        const {frames} = guessed;
+        const frame0 = frames[0] ?? [];
+        const indexOf = (search_for) => {
+            return Buffer.from(frame0).indexOf(Buffer.from(search_for));
+        }
+        // byte0: customer code 0
+        if (indexOf(customer_code[0]) !== 0) return;
+        frame0.splice(0, customer_code[0].length);
 
-    #get_key_bits(key_name) {
+        // byte1: customer code 0
+        if (indexOf(customer_code[1]) !== 0) return;
+        frame0.splice(0, customer_code[1].length);
+
+        // byte2: key code
+        // byte3: key code inverted (not interested)
+        const all_key_bits = this.constructor.#all_key_bits;
+        const key_bits = Object.fromEntries(Object.entries(all_key_bits)
+            .map(([key_name, ch12]) => [key_name, ch12[`ch${this.#ch}`]]));
+        const found = Object.entries(key_bits).find(([key_name, key_bits]) => {
+            return indexOf(key_bits) === 0;
+        });
+        const key_code =found?.[0];
+        if (key_code) {
+            console.log("[INCOMING] Detected key press:", key_code);
+            switch(key_code) {
+                case 'off':
+                case 'max':
+                case 'kirei':
+                case 'benkyo':
+                case 'relax':
+                case 'night-light':
+                case 'oyasumi-assist':
+                case 'color':
+                    this.action(key_code); // action returns {single:IRKIT_DICT} we don't need it
+                    this.emit('state-updated', {mode: key_code});
+                    break;
+                case '30mins':
+                    this.#sleep_set(30);
+                    break;
+                case '60mins':
+                    this.#sleep_set(60);
+                    break;
+                default:
+            }
+        }
+    }
+    static get #all_key_bits() {
         return {
-            max: {ch2: [0, 0, 0, 1, 0, 1, 1, 1], ch1: [0, 0, 0, 1, 0, 1, 1, 0]},
-            kirei: {ch2: [1, 0, 0, 1, 1, 0, 1, 1], ch1: [1, 0, 0, 1, 1, 0, 1, 0]},
-            theater: {ch1: [0, 0, 1, 0, 1, 0, 1, 0], ch2: [0, 0, 1, 0, 1, 0, 1, 1]},
-            benkyo: {ch1: [0, 0, 0, 1, 1, 0, 1, 0], ch2: [0, 0, 0, 1, 1, 0, 1, 1]},
-            relax: {ch1: [1, 1, 0, 0, 1, 0, 1, 0], ch2: [1, 1, 0, 0, 1, 0, 1, 1]},
-            "night-light": {ch1: [0, 0, 0, 0, 1, 1, 1, 0], ch2: [0, 0, 0, 0, 1, 1, 1, 1]},
-            "oyasumi-assist": {ch1: [0, 0, 0, 0, 0, 0, 1, 0], ch2: [0, 0, 0, 0, 0, 0, 1, 1]},
-            off: {ch1: [0, 0, 1, 0, 1, 1, 1, 0], ch2: [0, 0, 1, 0, 1, 1, 1, 1]},
-            color: {ch1: [0, 1, 1, 0, 1, 0, 1, 0], ch2: [0, 1, 1, 0, 1, 0, 1, 1]},
-            "30mins": {ch1: [1, 1, 0, 1, 1, 1, 1, 0], ch2: [1, 1, 0, 1, 1, 1, 1, 1]},
-            "60mins": {ch1: [0, 1, 0, 1, 1, 1, 1, 0], ch2: [0, 1, 0, 1, 1, 1, 1, 1]},
-            "brightness-down": {ch2: [0, 0, 0, 0, 0, 1, 1, 1], ch1: [0, 0, 0, 0, 0, 1, 1, 0]},
-            "brightness-up": {ch2: [0, 0, 1, 0, 0, 1, 1, 1], ch1: [0, 0, 1, 0, 0, 1, 1, 0]},
-            "color-temp-down": {ch2: [0, 0, 1, 0, 0, 0, 1, 0], ch1: [0, 1, 0, 1, 0, 1, 1, 0]},
-            "color-temp-up": {ch2: [1, 0, 0, 0, 1, 0, 0, 1], ch1: [0, 1, 0, 0, 1, 0, 0, 1]},
-            "blue-down": {ch2: [1, 0, 0, 0, 0, 1, 1, 1], ch1: [1, 0, 0, 0, 0, 1, 1, 0]},
-            "blue-up": {ch2: [0, 0, 1, 0, 0, 1, 0, 0], ch1: [1, 0, 1, 0, 0, 1, 0, 0]},
-            "green-down": {ch2: [0, 1, 1, 0, 0, 1, 0, 0], ch1: [1, 1, 1, 0, 0, 1, 0, 0]},
-            "green-up": {ch2: [0, 0, 0, 1, 0, 1, 0, 0], ch1: [1, 0, 0, 1, 0, 1, 0, 0]},
-            "red-down": {ch2: [0, 1, 0, 1, 0, 1, 0, 0], ch1: [1, 1, 0, 1, 0, 1, 0, 0]},
-            "red-up": {ch2: [0, 0, 1, 1, 0, 1, 0, 0], ch1: [1, 0, 1, 1, 0, 1, 0, 0]},
-        }[key_name]?.[`ch${this.setup?.ch ?? 1}`];
+            max: {ch2: [1, 1, 1, 0, 1, 0, 0, 0, ], ch1: [1, 1, 1, 0, 1, 0, 0, 1, ]},
+            kirei: {ch2: [0, 1, 1, 0, 0, 1, 0, 0, ], ch1: [0, 1, 1, 0, 0, 1, 0, 1, ]},
+            theater: {ch1: [1, 1, 0, 1, 0, 1, 0, 1, ], ch2: [1, 1, 0, 1, 0, 1, 0, 0, ]},
+            benkyo: {ch1: [1, 1, 1, 0, 0, 1, 0, 1, ], ch2: [1, 1, 1, 0, 0, 1, 0, 0, ]},
+            relax: {ch1: [0, 0, 1, 1, 0, 1, 0, 1, ], ch2: [0, 0, 1, 1, 0, 1, 0, 0, ]},
+            "night-light": {ch1: [1, 1, 1, 1, 0, 0, 0, 1, ], ch2: [1, 1, 1, 1, 0, 0, 0, 0, ]},
+            "oyasumi-assist": {ch1: [1, 1, 1, 1, 1, 1, 0, 1, ], ch2: [1, 1, 1, 1, 1, 1, 0, 0, ]},
+            off: {ch1: [1, 1, 0, 1, 0, 0, 0, 1, ], ch2: [1, 1, 0, 1, 0, 0, 0, 0, ]},
+            color: {ch1: [1, 0, 0, 1, 0, 1, 0, 1, ], ch2: [1, 0, 0, 1, 0, 1, 0, 0, ]},
+            "30mins": {ch1: [0, 0, 1, 0, 0, 0, 0, 1, ], ch2: [0, 0, 1, 0, 0, 0, 0, 0, ]},
+            "60mins": {ch1: [1, 0, 1, 0, 0, 0, 0, 1, ], ch2: [1, 0, 1, 0, 0, 0, 0, 0, ]},
+            "brightness-down": {ch2: [1, 1, 1, 1, 1, 0, 0, 0, ], ch1: [1, 1, 1, 1, 1, 0, 0, 1, ]},
+            "brightness-up": {ch2: [1, 1, 0, 1, 1, 0, 0, 0, ], ch1: [1, 1, 0, 1, 1, 0, 0, 1, ]},
+            "color-temp-down": {ch2: [1, 1, 0, 1, 1, 1, 0, 1, ], ch1: [1, 0, 1, 0, 1, 0, 0, 1, ]},
+            "color-temp-up": {ch2: [0, 1, 1, 1, 0, 1, 1, 0, ], ch1: [1, 0, 1, 1, 0, 1, 1, 0, ]},
+            "blue-down": {ch2: [0, 1, 1, 1, 1, 0, 0, 0, ], ch1: [0, 1, 1, 1, 1, 0, 0, 1, ]},
+            "blue-up": {ch2: [1, 1, 0, 1, 1, 0, 1, 1, ], ch1: [0, 1, 0, 1, 1, 0, 1, 1, ]},
+            "green-down": {ch2: [1, 0, 0, 1, 1, 0, 1, 1, ], ch1: [0, 0, 0, 1, 1, 0, 1, 1, ]},
+            "green-up": {ch2: [1, 1, 1, 0, 1, 0, 1, 1, ], ch1: [0, 1, 1, 0, 1, 0, 1, 1, ]},
+            "red-down": {ch2: [1, 0, 1, 0, 1, 0, 1, 1, ], ch1: [0, 0, 1, 0, 1, 0, 1, 1, ]},
+            "red-up": {ch2: [1, 1, 0, 0, 1, 0, 1, 1, ], ch1: [0, 1, 0, 0, 1, 0, 1, 1, ]},
+        };
+    }
+    #get_key_bits(key_name) {
+        return this.constructor.#all_key_bits[key_name]?.[`ch${this.setup?.ch ?? 1}`];
     }
 
     static get interface() {
@@ -148,7 +198,11 @@ class ToshibaCeilingLamp extends IrkitAppliance {
         }
     }
 
-    after_set_state() {
+    after_set_state(kv_pairs) {
+        if ('mode' in kv_pairs) {
+            console.log('received set mode', kv_pairs, '; perform sleep unset');
+            this.#sleep_unset();
+        }
     }
 
     static brightness_range(mode) {
@@ -417,6 +471,26 @@ class ToshibaCeilingLamp extends IrkitAppliance {
                 return;
         }
     }
+    #sleep_timer;
+    #sleep_set(mins) {
+        clearTimeout(this.#sleep_timer);
+        console.log(`[Toshiba ceiling lamp SLEEP] setting up ${mins} mins`);
+        this.emit('custom-event', {__name__: 'sleep', sleep: mins});
+        this.#sleep_timer = setTimeout(()=>{
+            console.log('[Toshiba ceiling lamp SLEEP] time up');
+            const new_states = {mode: 'off', brightness: 0};
+            this.set_states(new_states);
+            this.emit('custom-event', {__name__: 'sleep', sleep: false});
+            this.emit('state-updated', new_states);
+        }, mins * 60 * 1000);
+    }
+    #sleep_unset() {
+        console.log('[Toshiba ceiling lamp SLEEP] clear');
+        this.emit('custom-event', {__name__: 'sleep', sleep: false});
+        clearTimeout(this.#sleep_timer);
+        this.#sleep_timer = null;
+    }
+
 
 }
 

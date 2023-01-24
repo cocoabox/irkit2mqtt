@@ -143,7 +143,7 @@ class IrkitAppliance extends EventEmitter {
         if (! this.internal_set_state(state_name, state_value, {})) {
             return false;
         }
-        this.after_set_state();
+        this.after_set_state({[state_name]: state_value});
         return true;
     }
 
@@ -155,7 +155,7 @@ class IrkitAppliance extends EventEmitter {
                 return false;
             }
         }
-        this.after_set_state();
+        this.after_set_state(state_name_value_pairs);
         return true;
     }
     get_state(state_name, default_value=null) {
@@ -302,6 +302,9 @@ class IrkitAppliance extends EventEmitter {
                 return reje({error: 'busy'});
             }
         });
+    }
+    incoming_signal({message, guessed}) {
+        // to be sent to each child class when IRKit reads something
     }
 }
 

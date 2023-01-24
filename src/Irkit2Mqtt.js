@@ -137,6 +137,16 @@ class Irkit2Mqtt extends MqttClient {
         console.log(`[EVENT] appliance ${appliance_name} state updated`, JSON.stringify(states));
         this.#publish_appliance_status(appliance_name);
         this.#publish_appliance_status_individually(appliance_name);
+        const got_states = this.#get_appliance_inst(appliance_name)?.states;
+        if (got_states) {
+            this.#update_state_cache(appliance_name, got_states);
+        }
+    }
+    #on_appliance_custom_event(appliance_name, event_data) {
+        const event_name = event_data.__name__ ?? 'noname';
+        delete event_data.__name__;
+        console.log(`[EVENT] appliance ${appliance_name} triggered a custom event: ${event_name}`, JSON.stringify(event_data));
+        this.#publish_appliance_event(appliance_name, event_name, event_data);
     }
 
     #get_appliance_inst(name) {
@@ -161,6 +171,9 @@ class Irkit2Mqtt extends MqttClient {
         new_inst.on('state-updated', (states) => {
             this.#on_appliance_state_updated(name, states);
         });
+        new_inst.on('custom-event', (event_data) => {
+            this.#on_appliance_custom_event(name, event_data);
+        });
         return new_inst;
     }
     #get_irkit_inst(name) {
@@ -182,6 +195,16 @@ class Irkit2Mqtt extends MqttClient {
             this.#on_irkit_health_change(irkit_name, h);
         });
         irkit_inst.on('message', ({message, guessed}) => {
+            console.log('guessed :', guessed.frames.map(frame => Array.isArray(frame) ? frame.join('') : frame).join(' '));
+            for (const appliance_name of Object.keys(this.#appliances)) {
+                const app_inst = this.#get_appliance_inst(appliance_name); 
+                try {
+                    app_inst.incoming_signal({message, guessed});
+                }
+                catch (error) {
+                    console.warn(`appliance ${appliance_name}.incoming_signal() raised an exception`, error);
+                }
+            }
             this.#on_irkit_message(irkit_name, {message, guessed});
         });
 
@@ -659,7 +682,9 @@ class Irkit2Mqtt extends MqttClient {
         const msg = { model, appliance_type, state };
         await this.mqtt_publish(`${this.#topic_prefix}/${appliance_name}`, msg);
     }
-
+    async #publish_appliance_event(appliance_name, event_name, event_data) {
+        await this.mqtt_publish(`${this.#topic_prefix}/${appliance_name}/ev/${event_name}`, event_data);
+    }
     #get_mqtt_rewrite_plugin(appliance_name) {
         const appliance_model = this.#appliances[appliance_name].model;
         return plugin_find(appliance_model, 'mqtt_rewrite');
