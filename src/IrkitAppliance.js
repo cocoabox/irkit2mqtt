@@ -205,10 +205,10 @@ class IrkitAppliance extends EventEmitter {
      */
     send({timeout_sec} = {}) {
         timeout_sec ??= 60;
-        this.#log('💬 send() :' , JSON.stringify(this.states) , '⏱️ sec :' , timeout_sec);
+        this.#log('send() :' , this.states , '; timeout in' , timeout_sec , 'sec');
         return new Promise((send_all_done , reje) => {
             let timeout_timer = setTimeout(() => {
-                this.#log.warn('💬 🔥 send() timeout');
+                this.#log.warn('🔥 send() timeout');
                 reje({timeout : 1});
             } , timeout_sec * 1000);
             let irkit_data;

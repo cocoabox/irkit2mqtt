@@ -356,69 +356,71 @@ class Irkit2Mqtt extends MqttClient {
     }
 
     async mqtt_on_message(topic , message_obj) {
+        this.log.info('incoming MQTT message :' , topic ,
+            typeof message_obj === 'Buffer' ? message_obj.toString('utf8') : message_obj);
         const mat = topic.match(this.incoming_topic_pattern);
         const appliance_name = mat?.[2];
-        let topic_type;
+        let action_type;
         let ex_state_name;
         let action_name;
         if ( mat?.[1] === '__hello__' ) {
-            return this.#publish_all_appliances();
+            return await this.#publish_all_appliances();
         } else if ( mat?.[6] === 'set' ) {
-            topic_type = 'set';
+            action_type = 'set';
         } else if ( mat?.[7] === 'ex' ) {
-            topic_type = 'ex';
+            action_type = 'ex';
             ex_state_name = mat?.[8];
         } else if ( mat?.[4] === 'do' ) {
-            topic_type = 'do';
+            action_type = 'do';
             action_name = mat?.[5];
         } else {
             this.log.warn('topic doesnt match any known patterns (set,ex,do) :' , topic);
-            this.mqtt_publish(`${topic}/result` , 'bad-request');
+            await this.mqtt_publish(`${topic}/result` , 'bad-request');
             return;
         }
         try {
-            switch (topic_type) {
+            switch (action_type) {
                 case 'ex':
                     if ( message_obj instanceof Buffer ) {
                         message_obj = message_obj.toString('utf8');
                     }
                     const set_err = await this.#appliance_set_ex(
                         appliance_name , ex_state_name , message_obj);
-                    this.mqtt_publish(`${topic}/result` , set_err ? set_err : 'ok');
+                    await this.mqtt_publish(`${topic}/result` , set_err ? set_err : 'ok');
                     break;
                 case 'set':
                     if ( message_obj instanceof Buffer ) {
                         this.log.warn(`for this topic "${topic}" valid JSON message body is required; got :` , message_obj.toString());
-                        this.mqtt_publish(`${topic}/result` , 'bad-request');
+                        await this.mqtt_publish(`${topic}/result` , 'bad-request');
                     }
                     if ( typeof message_obj === 'object' ) {
                         const err = await this.#appliance_set(appliance_name , message_obj);
-                        this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
+                        await this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
                     } else {
                         this.log.warn(`for this topic "${topic}" a JSON message body is required; got :` , message_obj);
-                        this.mqtt_publish(`${topic}/result` , 'bad-request');
+                        await this.mqtt_publish(`${topic}/result` , 'bad-request');
                     }
                     break;
                 case 'do':
                     if ( ! action_name ) {
                         this.log.warn('action name is required in topic');
-                        this.mqtt_publish(`${topic}/result` , 'bad-request');
+                        await this.mqtt_publish(`${topic}/result` , 'bad-request');
                     } else if ( message_obj === null || typeof message_obj === 'undefined' ) {
                         const err = await this.#appliance_do(appliance_name , action_name , []);
-                        this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
+                        await this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
                     } else if ( Array.isArray(message_obj) ) {
                         const err = await this.#appliance_do(appliance_name , action_name , message_obj);
-                        this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
+                        await this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
                     } else if ( ['boolean' , 'string' , 'number'].includes(typeof message_obj) ) {
                         const err = await this.#appliance_do(appliance_name , action_name , [message_obj]);
-                        this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
+                        await this.mqtt_publish(`${topic}/result` , err ? err : 'ok');
                     } else {
                         this.log.warn(`for this topic "${topic}" either JSON (Array) or primitive type is required as message body`);
-                        this.mqtt_publish(`${topic}/result` , 'bad-request');
+                        await this.mqtt_publish(`${topic}/result` , 'bad-request');
                     }
                     break;
                 default:
-                    this.log.warn(`unsupported operation : ${topic_type}`);
+                    this.log.warn(`unsupported operation : ${action_type}`);
             }
         } catch (error) {
             this.log.warn('uncaught exception when processing appliance message' , error);
@@ -517,6 +519,8 @@ class Irkit2Mqtt extends MqttClient {
                     to255scale ,
                     from255scale ,
                     appliance : inst ,
+                    log : this.log ,
+                    warn : this.log.warn ,
                 };
                 final_value = set.apply(ctx , [state_value , inst.states]);
                 if ( typeof final_value === 'undefined' ) {
@@ -690,6 +694,8 @@ class Irkit2Mqtt extends MqttClient {
             to255scale ,
             from255scale ,
             appliance : inst ,
+            log : this.log ,
+            warn : this.log.warn ,
         };
         if ( ! expa || Object.keys(expa).length === 0 ) {
             this.log('no rewrite plugins (or empty) for' , appliance_name);

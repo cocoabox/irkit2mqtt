@@ -144,17 +144,6 @@ class NationalA75C3026 extends IrkitAppliance {
                           odour_reduction ,
                       } = {}
     ) {
-        this.log('[NationalA75C3026] generate data for :' , {
-            power ,
-            mode ,
-            temp ,
-            direction ,
-            strength ,
-            timer ,
-            timer_hours ,
-            internal_dry ,
-            odour_reduction ,
-        });
         const on_timer_hours = timer === 'on' ? timer_hours : null;
         const off_timer_hours = timer === 'off' ? timer_hours : null;
 

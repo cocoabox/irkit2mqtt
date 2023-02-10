@@ -149,7 +149,7 @@ class Irkit extends EventEmitter {
                 this.#poll_timer = setTimeout(poll_func , this.#poll_interval * 1000);
             };
             if ( this.#queue.shouldRun ) {
-                this.#log.warn(`[BUSY] send queue is running (size=${this.#queue.size}), next poll in ${this.#poll_interval} sec`);
+                this.#log.warn(`[BUSY] cannot start_poll; send queue is running (size=${this.#queue.size})`);
                 return schedule_next_poll();
             }
             try {
@@ -345,7 +345,7 @@ class Irkit extends EventEmitter {
                     return resolve(res);
                 } catch (error) {
                     this.#set_healthy(false);
-                    this.#log.warn(`📮 post error : ${error}`);
+                    this.#log.error('📮 post error :' , error);
                     return reject({error});
                 }
             });

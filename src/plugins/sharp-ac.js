@@ -188,11 +188,6 @@ class SharpA909JB extends IrkitAppliance {
                           timer_hours , internal_clean , ion , power_saving , dry_hours , manually_assign
                       } = {}
     ) {
-        this.log('[SharpA909JB] generate data for :' , {
-            power , mode , temp , direction , strength , timer ,
-            timer_hours , internal_clean , ion , power_saving , dry_hours , manually_assign
-        });
-
         const to_Nbit_binary = (n , bits) => {
             if ( ! bits || bits > 32 ) throw new Error('expecting bits to be 1..32');
             var out = Number(n & ((1 << bits) - 1)).toString(2);
